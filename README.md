@@ -33,7 +33,7 @@ Some was added manually by running transmission graphs through WebPlotDigitizer.
 
 Adding data:
 If you want to add your own data I recommend turning a transmission graph into a .csv using WebPlotDigitizer: https://apps.automeris.io/wpd4/
-Then turn that .csv into the right .tsv format by using my conversion tool, linked here: [placeholder]
+Then turn that .csv into the right .tsv format by using my conversion tool, linked here: https://github.com/CheeseCube312/CheeseCube-Filter-Plotter-WPB.csv-Importer/tree/main
 
 It interpolates the data and puts it into the right 5nm steps. Then just rename the .tsv and copy + paste it into the filters_data folder
 
