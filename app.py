@@ -23,7 +23,7 @@ if st.sidebar.button("🔄 Refresh Filters"):
     st.cache_data.clear()
     st.rerun()
 
-# --- Load Data ---
+# --- Load Data from filters_data folder ---
 @st.cache_data
 def load_data():
     folder = "filters_data"
@@ -41,10 +41,11 @@ def load_data():
             if "Filter Number" not in tmp.columns:
                 continue
 
-            if "Hex Color" in tmp.columns:
-                tmp["Hex"] = tmp["Hex Color"]
-            else:
-                tmp["Hex"] = "#1f77b4"
+            # Set hex color
+            tmp["Hex"] = tmp["Hex Color"] if "Hex Color" in tmp.columns else "#1f77b4"
+
+            # Set manufacturer
+            tmp["Manufacturer"] = tmp["Manufacturer"] if "Manufacturer" in tmp.columns else "Unknown"
 
             all_wls.update(int(w) for w in wl_cols)
             tmp["source_file"] = os.path.basename(path)
@@ -64,7 +65,7 @@ df, wavelengths = load_data()
 if df.empty:
     st.stop()
 
-filter_display = df["Filter Name"] + " (" + df["Filter Number"] + ")"
+filter_display = df["Filter Name"] + " (" + df["Filter Number"] + ", " + df["Manufacturer"] + ")"
 display_to_index = {name: i for i, name in enumerate(filter_display)}
 
 # --- Interpolation ---
@@ -117,110 +118,99 @@ sensor_qe = interp1d(qe_nm, qe_val, bounds_error=False, fill_value=0.0)(INTERP_G
 
 
 # --- Plotting UI Sidebar ---
-selected = st.sidebar.multiselect("Choose filters to plot", options=filter_display)
-
+selected = st.sidebar.multiselect("Select filters to plot", options=filter_display)
 show_combined = st.sidebar.checkbox("Show combined filter", value=True)
-
 log_stops = st.sidebar.checkbox("Display in stop-view", value=False)
 
-use_sensor_weighting = st.sidebar.checkbox("Apply sensor QE adjustment", value=True)
 
+# App title
+st.markdown(
+    """
+    <div style='display: flex; justify-content: space-between; align-items: center;'>
+        <h4 style='margin: 0;'>🧀 CheeseCubes Filter Designer</h4>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-
-st.title("🧀 CheeseCubes Filter Designer")
 
 
 if selected:
-    fig = go.Figure()
     selected_indices = [display_to_index[name] for name in selected]
 
-    # --- Plot each filter ---
+    # --- Create plot ---
+    fig = go.Figure()
+
+    # --- Plot each selected filter ---
     for idx in selected_indices:
         row = df.iloc[idx]
-        y_linear = filter_matrix[idx] * 100  # in percent
-        mask = extrapolated_masks[idx]
-
-        y_plot = np.log2(np.clip(y_linear / 100, 1e-6, 1.0)) if log_stops else y_linear
+        transmission = np.clip(filter_matrix[idx], 1e-6, 1.0)
+        extrap_mask = extrapolated_masks[idx]
+        y_values = np.log2(transmission) if log_stops else transmission * 100
 
         fig.add_trace(go.Scatter(
-            x=INTERP_GRID[~mask],
-            y=y_plot[~mask],
-            name=row["Filter Name"],
+            x=INTERP_GRID[~extrap_mask],
+            y=y_values[~extrap_mask],
+            name=f"{row['Filter Name']} ({row['Filter Number']})",
             mode="lines",
             line=dict(dash="solid", color=row["Hex Color"])
         ))
 
-        if np.any(mask):
+        if np.any(extrap_mask):
             fig.add_trace(go.Scatter(
-                x=INTERP_GRID[mask],
-                y=y_plot[mask],
-                name=f"{row['Filter Name']} (Extrapolated)",
+                x=INTERP_GRID[extrap_mask],
+                y=y_values[extrap_mask],
+                name=f"{row['Filter Name']} ({row['Filter Number']}) (Extrapolated)",
+
                 mode="lines",
                 line=dict(dash="dash", color=row["Hex Color"]),
                 showlegend=False
             ))
 
-    # --- Plot combined filter if needed ---
+    # --- Combined Filter ---
     if show_combined and len(selected_indices) > 1:
         stack = np.array([filter_matrix[i] for i in selected_indices])
-        combined_linear = np.nanprod(stack, axis=0)
+        combined = np.nanprod(stack, axis=0)
+        combined[np.any(np.isnan(stack), axis=0)] = np.nan
+        combined = np.clip(combined, 1e-6, 1.0)
 
-        # Mask combined wherever any filter has NaN
-        nan_mask = np.any(np.isnan(stack), axis=0)
-        combined_linear[nan_mask] = np.nan
-
-        combined_plot = np.log2(np.clip(combined_linear, 1e-6, 1.0)) if log_stops else combined_linear * 100
+        combined_y = np.log2(combined) if log_stops else combined * 100
 
         fig.add_trace(go.Scatter(
             x=INTERP_GRID,
-            y=combined_plot,
+            y=combined_y,
             name="Combined Filter",
             mode="lines",
             line=dict(color="black", width=2)
         ))
 
-    # --- Set Y-axis formatting ---
-    if log_stops:
-        fig.update_layout(
-            title="Combined Filter Response",
-            xaxis_title="Wavelength (nm)",
-            yaxis=dict(
-                title="Stops (log₂)",
-                range=(-7, 0),
-                tickvals=[0, -1, -2, -3, -4, -5, -6, -7],
-                ticktext=["0", "-1", "-2", "-3", "-4", "-5", "-6", "-7"]
-            ),
-            xaxis_range=(min(INTERP_GRID), max(INTERP_GRID)),
-            showlegend=True
-        )
-    else:
-        fig.update_layout(
-            title="Combined Filter Response",
-            xaxis_title="Wavelength (nm)",
-            yaxis_title="Transmission (%)",
-            xaxis_range=(min(INTERP_GRID), max(INTERP_GRID)),
-            yaxis_range=(0, 100),
-            showlegend=True
-        )
+    # --- Plot formatting ---
+    fig.update_layout(
+        title="Combined Filter Response",
+        xaxis_title="Wavelength (nm)",
+        yaxis_title="Stops (log₂)" if log_stops else "Transmission (%)",
+        xaxis_range=(min(INTERP_GRID), max(INTERP_GRID)),
+        yaxis=dict(
+            range=(-10, 0) if log_stops else (0, 100),
+            tickvals=[0, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10] if log_stops else None,
+            ticktext=["0", "-1", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10"] if log_stops else None
+        ),
+        showlegend=True
+    )
 
-    # --- Compute effective light loss (always from linear domain) ---
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Estimate light loss ---
     if show_combined and len(selected_indices) > 1:
-        trans = combined_linear
+        trans = combined
         label = "Combined"
     else:
-        idx = selected_indices[0]
-        trans = filter_matrix[idx]
-        label = df.iloc[idx]["Filter Name"]
+        trans = filter_matrix[selected_indices[0]]
+        label = df.iloc[selected_indices[0]]["Filter Name"]
 
-    # Mask NaNs before computing average transmission
     valid = ~np.isnan(trans)
-
     if np.any(valid):
-        if use_sensor_weighting:
-            avg_trans = np.average(np.clip(trans[valid], 1e-6, 1.0), weights=sensor_qe[valid])
-        else:
-            avg_trans = np.nanmean(np.clip(trans[valid], 1e-6, 1.0))
-
+        avg_trans = np.average(np.clip(trans[valid], 1e-6, 1.0), weights=sensor_qe[valid])
         effective_stops = -np.log2(avg_trans)
         st.markdown(
             f"📉 **Estimated light loss ({label}):** {effective_stops:.2f} stops  \n"
@@ -229,11 +219,8 @@ if selected:
     else:
         st.warning(f"⚠️ Cannot compute average transmission for {label}: insufficient data.")
 
-
-    # --- Render plot ---
-    st.plotly_chart(fig, use_container_width=True)
 else:
-    st.write("👈 Select filters from the sidebar to visualize their spectral performance.")
+    st.write("No filter selected right now.")
 
 
 
