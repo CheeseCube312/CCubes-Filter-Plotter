@@ -17,13 +17,13 @@ INTERP_GRID = np.arange(300, 1101, 5)  # 300–1100nm, 5nm step
 # --- App Setup ---
 st.set_page_config(page_title="CheeseCubes Filter Plotter", layout="wide")
 
-# --- Sidebar ---
+# --- Create Sidebar ---
 st.sidebar.header("Filter Plotter")
 if st.sidebar.button("🔄 Refresh Filters"):
     st.cache_data.clear()
     st.rerun()
 
-# --- Load Data from filters_data folder ---
+# --- DEF: Load Data from filters_data folder ---
 @st.cache_data
 def load_data():
     folder = "filters_data"
@@ -41,11 +41,12 @@ def load_data():
             if "Filter Number" not in tmp.columns:
                 continue
 
-            # Set hex color
-            tmp["Hex"] = tmp["Hex Color"] if "Hex Color" in tmp.columns else "#1f77b4"
+            if "Hex Color" not in tmp.columns:
+                tmp["Hex Color"] = "#1f77b4"
+            tmp["Hex"] = tmp["Hex Color"]
 
-            # Set manufacturer
-            tmp["Manufacturer"] = tmp["Manufacturer"] if "Manufacturer" in tmp.columns else "Unknown"
+            if "Manufacturer" not in tmp.columns:
+                tmp["Manufacturer"] = "Unknown"
 
             all_wls.update(int(w) for w in wl_cols)
             tmp["source_file"] = os.path.basename(path)
@@ -59,6 +60,8 @@ def load_data():
     df["Filter Number"] = df["Filter Number"].astype(str)
     df["Filter Name"] = df.get("Filter Name", df["Filter Number"])
     df["is_lee"] = df["source_file"].str.contains("LeeFilters", case=False)
+    df = df.copy()  # Defragment the DataFrame to prevent the warning
+
     return df, sorted(all_wls)
 
 df, wavelengths = load_data()
@@ -68,7 +71,58 @@ if df.empty:
 filter_display = df["Filter Name"] + " (" + df["Filter Number"] + ", " + df["Manufacturer"] + ")"
 display_to_index = {name: i for i, name in enumerate(filter_display)}
 
-# --- Interpolation ---
+
+
+# -- DEF: Load data from QE_data folder --
+@st.cache_data
+def load_qe_files():
+    qe_folder = "QE_data"
+    files = glob.glob(os.path.join(qe_folder, "*.tsv"))
+    qe_dict = {}
+    default_key = None
+
+    for f in files:
+        df = pd.read_csv(f, sep="\t")
+        for _, row in df.iterrows():
+            channel = row["Channel"].strip().capitalize()
+            brand = row["Camera Brand"].strip()
+            model = row["Camera Model"].strip()
+            key = f"{brand} {model}"
+
+            # Wavelength data
+            spectrum = row.iloc[3:].astype(float).values
+            wavelengths = df.columns[3:].astype(float)
+            interp_curve = np.interp(INTERP_GRID, wavelengths, spectrum, left=0, right=0)
+
+            if key not in qe_dict:
+                qe_dict[key] = {}
+            qe_dict[key][channel] = interp_curve
+
+            # Check if this is the default file
+            if os.path.basename(f) == "Default_QE.tsv":
+                default_key = key
+
+    keys_sorted = sorted(qe_dict.keys())
+    return keys_sorted, qe_dict, default_key
+
+# Load QE files
+camera_keys, qe_data, default_key = load_qe_files()
+
+# Set default selection
+default_index = camera_keys.index(default_key) + 1 if default_key in camera_keys else 0
+
+# Sidebar selector
+selected_camera = st.sidebar.selectbox("Sensor QE Profile", ["None"] + camera_keys, index=default_index)
+
+# Extract selected QE curves
+if selected_camera != "None":
+    current_qe = qe_data[selected_camera]
+else:
+    current_qe = None
+
+
+
+# --- DEF: Interpolation ---
 def interpolate_filters(df, wavelengths):
     matrix = []
     extrapolated_masks = []
@@ -108,13 +162,18 @@ def interpolate_filters(df, wavelengths):
 
 filter_matrix, extrapolated_masks = interpolate_filters(df, wavelengths)
 
-# --- Sensor QE weighting curve (normalized for full-spectrum Bayer sensor) ---
-qe_nm = np.array([300, 350, 400, 450, 500, 550, 600, 650, 700, 750,
-                  800, 850, 900, 950, 1000, 1050, 1100])
-qe_val = np.array([0.00, 0.01, 0.10, 0.30, 0.65, 1.00, 0.95, 0.85, 0.70, 0.50,
-                   0.35, 0.25, 0.15, 0.08, 0.03, 0.01, 0.00])
-from scipy.interpolate import interp1d
-sensor_qe = interp1d(qe_nm, qe_val, bounds_error=False, fill_value=0.0)(INTERP_GRID)
+# --- Dynamic QE weighting: fallback to default mono QE if no camera selected ---
+if current_qe:
+    # Use average of all selected QE channels
+    qe_curves = np.array([curve for _, curve in current_qe.items()])
+    sensor_qe = np.nanmean(qe_curves, axis=0)
+else:
+    # Default mono curve
+    qe_nm = np.array([300, 350, 400, 450, 500, 550, 600, 650, 700, 750,
+                      800, 850, 900, 950, 1000, 1050, 1100])
+    qe_val = np.array([0.00, 0.01, 0.10, 0.30, 0.65, 1.00, 0.95, 0.85, 0.70, 0.50,
+                       0.35, 0.25, 0.15, 0.08, 0.03, 0.01, 0.00])
+    sensor_qe = interp1d(qe_nm, qe_val, bounds_error=False, fill_value=0.0)(INTERP_GRID)
 
 
 # --- Plotting UI Sidebar ---
@@ -223,5 +282,89 @@ else:
     st.write("No filter selected right now.")
 
 
+# --- Show sensor-weighted response (QE × Transmission) ---
+if selected and current_qe:
+    st.subheader("Sensor-Weighted Response (QE × Transmission)")
 
+    show_log_response = st.sidebar.checkbox("Sensor-weighted response: Show in stop view", value=False)
+
+    fig_response = go.Figure()
+    trans = None
+
+    if show_combined and len(selected_indices) > 1:
+        # Use combined filter
+        stack = np.array([filter_matrix[i] for i in selected_indices])
+        trans = np.nanprod(stack, axis=0)
+        trans[np.any(np.isnan(stack), axis=0)] = np.nan
+    else:
+        trans = filter_matrix[selected_indices[0]]
+
+    for channel, qe_curve in current_qe.items():
+        show = st.checkbox(f"Show {channel} response", value=True, key=f"resp_{channel}")
+        if not show:
+            continue
+
+        weighted = np.clip(trans * (qe_curve / 100), 1e-6, 1.0)  # Avoid log(0)
+        y_values = -np.log2(weighted) if show_log_response else weighted * 100
+
+        fig_response.add_trace(go.Scatter(
+            x=INTERP_GRID,
+            y=y_values,
+            name=f"{channel} Response",
+            mode="lines",
+            line=dict(width=2)
+        ))
+
+    fig_response.update_layout(
+        title="Effective Sensor Response (Transmission × QE)",
+        xaxis_title="Wavelength (nm)",
+        yaxis_title="Stops (log₂)" if show_log_response else "Response (%)",
+        xaxis_range=[300, 1100],
+        yaxis=dict(
+            range=[0, 10] if show_log_response else [0, 30],
+            tickvals=list(range(0, 11)) if show_log_response else None,
+            ticktext=[f"-{i}" for i in range(0, 11)] if show_log_response else None
+        ),
+        showlegend=True,
+        height=400
+    )
+
+    st.plotly_chart(fig_response, use_container_width=True)
+
+
+    
+# --- QE Plotting ---
+if current_qe:
+    st.subheader("Quantum Efficiency (QE) Curves")
+
+    fig_qe = go.Figure()
+    visible_channels = []
+
+    # Checkbox for each available channel
+    for channel in current_qe.keys():
+        show_channel = st.checkbox(f"Show {channel} Channel", value=True)
+        if show_channel:
+            visible_channels.append(channel)
+
+    # Add traces to plot
+    for channel in visible_channels:
+        fig_qe.add_trace(go.Scatter(
+            x=INTERP_GRID,
+            y=current_qe[channel],
+            name=f"{channel} Channel",
+            mode="lines",
+            line=dict(width=2)
+        ))
+
+    fig_qe.update_layout(
+        title=f"Quantum Efficiency: {selected_camera}",
+        xaxis_title="Wavelength (nm)",
+        yaxis_title="QE (%)",
+        xaxis_range=[300, 1100],
+        yaxis_range=[0, 100],
+        showlegend=True,
+        height=400
+    )
+
+    st.plotly_chart(fig_qe, use_container_width=True)
 
