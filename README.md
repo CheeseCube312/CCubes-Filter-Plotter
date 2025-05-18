@@ -11,7 +11,6 @@ _______________________________________________________________
 
 Installation:
 
-
 1) Install Python 3.8 or higher. Make sure to Install to PATH (should be selectible in install wizard) https://www.python.org/
 
 2) Run Install.bat
@@ -22,20 +21,21 @@ After first install you can start with start.bat. It just starts the program wit
 
 ______________________________________________________________
 
+Adding/Removing data:
 
+Turn graphs into .csv files unsing WebPlotDigitizer: https://apps.automeris.io/wpd4/
+
+Use the Filter Importer for to turn Filters into the right format: https://github.com/CheeseCube312/CCube_WPB.csv_Filter-Importer
+Use the QE Importer for to turn Quantum Efficiency data into the right format: https://github.com/CheeseCube312/CCube_WPB.csv_QE-Importer/tree/main
+Just follow the instructions for those. :)
+
+______________________________________________________________
 Filter data format:
 The program is designed to use a folder full of individual .tsv files for each filter. Row 1 contains header, row 2 contains the data. The data range is 300-1100nm, in 5nm steps. The software can handle incomplete wavelength data.
 
 I've included a large collection of filters. Most was added by scraping the LeeFilter website since that data matches my swatchbook. Since I know that Lee Filters rise to ~90% transmission at 800nm and then stay there the data for them gets very roughly extrapolated by the software. 
 
 Some was added manually by running transmission graphs through WebPlotDigitizer. 
-
-
-Adding data:
-If you want to add your own data I recommend turning a transmission graph into a .csv using WebPlotDigitizer: https://apps.automeris.io/wpd4/
-Then turn that .csv into the right .tsv format by using my conversion tool, linked here: https://github.com/CheeseCube312/CheeseCube-Filter-Plotter-WPB.csv-Importer/tree/main
-
-It interpolates the data and puts it into the right 5nm steps. Then just rename the .tsv and copy + paste it into the filters_data folder
 
 
 Legal:
