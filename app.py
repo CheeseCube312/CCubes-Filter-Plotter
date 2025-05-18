@@ -197,6 +197,33 @@ st.markdown(
 if selected:
     selected_indices = [display_to_index[name] for name in selected]
 
+    # --- Combined Filter ---
+    combined = None  # Initialize outside to use later
+    if show_combined and len(selected_indices) > 1:
+        stack = np.array([filter_matrix[i] for i in selected_indices])
+        combined = np.nanprod(stack, axis=0)
+        combined[np.any(np.isnan(stack), axis=0)] = np.nan
+        combined = np.clip(combined, 1e-6, 1.0)
+
+    # --- Estimate light loss (show this up top) ---
+    if show_combined and len(selected_indices) > 1:
+        trans = combined
+        label = "Combined"
+    else:
+        trans = filter_matrix[selected_indices[0]]
+        label = df.iloc[selected_indices[0]]["Filter Name"]
+
+    valid = ~np.isnan(trans)
+    if np.any(valid):
+        avg_trans = np.average(np.clip(trans[valid], 1e-6, 1.0), weights=sensor_qe[valid])
+        effective_stops = -np.log2(avg_trans)
+        st.markdown(
+            f"📉 **Estimated light loss ({label}):** {effective_stops:.2f} stops  \n"
+            f"(Avg transmission: {avg_trans * 100:.1f}%)"
+        )
+    else:
+        st.warning(f"⚠️ Cannot compute average transmission for {label}: insufficient data.")
+
     # --- Create plot ---
     fig = go.Figure()
 
@@ -220,21 +247,14 @@ if selected:
                 x=INTERP_GRID[extrap_mask],
                 y=y_values[extrap_mask],
                 name=f"{row['Filter Name']} ({row['Filter Number']}) (Extrapolated)",
-
                 mode="lines",
                 line=dict(dash="dash", color=row["Hex Color"]),
                 showlegend=False
             ))
 
-    # --- Combined Filter ---
-    if show_combined and len(selected_indices) > 1:
-        stack = np.array([filter_matrix[i] for i in selected_indices])
-        combined = np.nanprod(stack, axis=0)
-        combined[np.any(np.isnan(stack), axis=0)] = np.nan
-        combined = np.clip(combined, 1e-6, 1.0)
-
+    # --- Plot combined line ---
+    if combined is not None:
         combined_y = np.log2(combined) if log_stops else combined * 100
-
         fig.add_trace(go.Scatter(
             x=INTERP_GRID,
             y=combined_y,
@@ -257,36 +277,14 @@ if selected:
         showlegend=True
     )
 
+    # --- Show plot ---
     st.plotly_chart(fig, use_container_width=True)
-
-    # --- Estimate light loss ---
-    if show_combined and len(selected_indices) > 1:
-        trans = combined
-        label = "Combined"
-    else:
-        trans = filter_matrix[selected_indices[0]]
-        label = df.iloc[selected_indices[0]]["Filter Name"]
-
-    valid = ~np.isnan(trans)
-    if np.any(valid):
-        avg_trans = np.average(np.clip(trans[valid], 1e-6, 1.0), weights=sensor_qe[valid])
-        effective_stops = -np.log2(avg_trans)
-        st.markdown(
-            f"📉 **Estimated light loss ({label}):** {effective_stops:.2f} stops  \n"
-            f"(Avg transmission: {avg_trans * 100:.1f}%)"
-        )
-    else:
-        st.warning(f"⚠️ Cannot compute average transmission for {label}: insufficient data.")
 
 else:
     st.write("No filter selected right now.")
-
-
 # --- Show sensor-weighted response (QE × Transmission) ---
 if selected and current_qe:
     st.subheader("Sensor-Weighted Response (QE × Transmission)")
-
-    show_log_response = st.sidebar.checkbox("Sensor-weighted response: Show in stop view", value=False)
 
     fig_response = go.Figure()
     trans = None
@@ -299,13 +297,18 @@ if selected and current_qe:
     else:
         trans = filter_matrix[selected_indices[0]]
 
-    for channel, qe_curve in current_qe.items():
-        show = st.checkbox(f"Show {channel} response", value=True, key=f"resp_{channel}")
+    # Horizontal layout for channel toggles
+    channel_names = list(current_qe.keys())
+    cols = st.columns(len(channel_names))
+
+    for i, (channel, qe_curve) in enumerate(current_qe.items()):
+        with cols[i]:
+            show = st.checkbox(f"{channel} channel", value=True, key=f"resp_{channel}")
         if not show:
             continue
 
-        weighted = np.clip(trans * (qe_curve / 100), 1e-6, 1.0)  # Avoid log(0)
-        y_values = -np.log2(weighted) if show_log_response else weighted * 100
+        weighted = trans * (qe_curve / 100)
+        y_values = weighted * 100  # Always percentage view
 
         fig_response.add_trace(go.Scatter(
             x=INTERP_GRID,
@@ -318,39 +321,25 @@ if selected and current_qe:
     fig_response.update_layout(
         title="Effective Sensor Response (Transmission × QE)",
         xaxis_title="Wavelength (nm)",
-        yaxis_title="Stops (log₂)" if show_log_response else "Response (%)",
+        yaxis_title="Response (%)",
         xaxis_range=[300, 1100],
-        yaxis=dict(
-            range=[0, 10] if show_log_response else [0, 30],
-            tickvals=list(range(0, 11)) if show_log_response else None,
-            ticktext=[f"-{i}" for i in range(0, 11)] if show_log_response else None
-        ),
+        yaxis_range=[0, 100],
         showlegend=True,
         height=400
     )
 
     st.plotly_chart(fig_response, use_container_width=True)
 
-
-    
-# --- QE Plotting ---
+ # --- QE Plotting ---
 if current_qe:
     st.subheader("Quantum Efficiency (QE) Curves")
 
     fig_qe = go.Figure()
-    visible_channels = []
 
-    # Checkbox for each available channel
-    for channel in current_qe.keys():
-        show_channel = st.checkbox(f"Show {channel} Channel", value=True)
-        if show_channel:
-            visible_channels.append(channel)
-
-    # Add traces to plot
-    for channel in visible_channels:
+    for channel, qe_curve in current_qe.items():
         fig_qe.add_trace(go.Scatter(
             x=INTERP_GRID,
-            y=current_qe[channel],
+            y=qe_curve,
             name=f"{channel} Channel",
             mode="lines",
             line=dict(width=2)
