@@ -190,6 +190,16 @@ def interpolate_filters(df, wavelengths):
 
 filter_matrix, extrapolated_masks = interpolate_filters(df, wavelengths)
 
+# DEF white balance gains normalized to green
+
+def get_white_balance_gains(rgb_estimates: dict) -> dict:
+    """Compute white balance gains normalized to green."""
+    if "G" in rgb_estimates and rgb_estimates["G"] > 0:
+        return {k: v / rgb_estimates["G"] for k, v in rgb_estimates.items()}
+    else:
+        return {"R": 0, "G": 1.0, "B": 0}
+
+
 # --- Dynamic QE weighting: fallback to default mono QE if no camera selected ---
 if current_qe:
     # Use average of all selected QE channels
@@ -321,20 +331,39 @@ if selected:
 
 else:
     st.write("No filter selected right now.")
+
+
 # --- Show sensor-weighted response (QE × Transmission) ---
 if selected and current_qe:
     st.subheader("Sensor-Weighted Response (QE × Transmission)")
 
     fig_response = go.Figure()
-    trans = None
+    apply_white_balance = st.checkbox("Apply White Balance to Response", value=False)
 
+    trans = None
     if show_combined and len(selected_indices) > 1:
-        # Use combined filter
         stack = np.array([filter_matrix[i] for i in selected_indices])
         trans = np.nanprod(stack, axis=0)
         trans[np.any(np.isnan(stack), axis=0)] = np.nan
     else:
         trans = filter_matrix[selected_indices[0]]
+
+    # Multiply transmission × QE × illuminant per channel
+    rgb = {}
+    for channel, qe_curve in current_qe.items():
+        weighted = np.nan_to_num(trans * (qe_curve / 100) * selected_illum)
+        rgb[channel] = np.sum(weighted)
+
+# Default: identity white balance
+white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
+
+# Override if WB is toggled on and session has valid gains
+if apply_white_balance:
+    white_balance_gains = st.session_state.get(
+        "white_balance_gains",
+        white_balance_gains  # fallback to default (1.0 gain for all)
+    )
+
 
     # Horizontal layout for channel toggles
     channel_names = list(current_qe.keys())
@@ -343,16 +372,18 @@ if selected and current_qe:
     for i, (channel, qe_curve) in enumerate(current_qe.items()):
         with cols[i]:
             show = st.checkbox(f"{channel} channel", value=True, key=f"resp_{channel}")
-        if not show:
-            continue
+            if not show:
+                continue
 
-        weighted = trans * (qe_curve / 100)
-        y_values = weighted * 100  # Always percentage view
+        gain = white_balance_gains.get(channel, 1.0) if apply_white_balance else 1.0
+
+        weighted = np.nan_to_num(trans * (qe_curve / 100)) * gain
+        y_values = weighted * 100  # Keep in percent scale
 
         fig_response.add_trace(go.Scatter(
             x=INTERP_GRID,
             y=y_values,
-            name=f"{channel} Response",
+            name=f"{channel} Response{' (WB)' if apply_white_balance else ''}",
             mode="lines",
             line=dict(width=2)
         ))
@@ -381,20 +412,19 @@ if selected and current_qe and selected_illum is not None:
         else:
             trans = filter_matrix[selected_indices[0]]
 
-        # Multiply transmission × QE × illuminant per channel
-        rgb = {}
-
+        # Compute white balance gains (R and B scaled relative to G = 1.0)
+        rgb_response = {}
         for channel, qe_curve in current_qe.items():
             weighted = np.nan_to_num(trans * (qe_curve / 100) * selected_illum)
-            rgb[channel] = np.sum(weighted)
+            rgb_response[channel] = np.sum(weighted)
 
-        
-        # Normalize to G = 1 safely
-        if "G" in rgb and rgb["G"] > 0:
-            gains = {k: v / rgb["G"] for k, v in rgb.items()}
-        else:
-            st.warning("⚠️ Could not normalize RGB — missing or zero G channel.")
-            gains = {"R": 0, "G": 1, "B": 0}
+        # Normalize to green channel
+        white_balance_gains = {
+            "R": rgb_response.get("R", 1.0) / rgb_response.get("G", 1.0),
+            "G": 1.0,
+            "B": rgb_response.get("B", 1.0) / rgb_response.get("G", 1.0),
+        }
+
 
 
         # Convert to XYZ (sRGB primaries)
@@ -403,7 +433,7 @@ if selected and current_qe and selected_illum is not None:
             [0.2126, 0.7152, 0.0722],
             [0.0193, 0.1192, 0.9505]
         ])
-        vec_rgb = np.array([gains.get("R", 0), 1.0, gains.get("B", 0)])
+        vec_rgb = np.array([white_balance_gains.get("R", 0), 1.0, white_balance_gains.get("B", 0)])
         XYZ = M @ vec_rgb
         X, Y, Z = XYZ
         total = X + Y + Z
@@ -421,9 +451,9 @@ if selected and current_qe and selected_illum is not None:
 
         st.markdown(f"""
         **RGB White Balance Multipliers** (G = 1):  
-        - R: `{gains.get('R', 0):.3f}`  
+        - R: `{white_balance_gains.get('R', 0):.3f}`  
         - G: `1.000`  
-        - B: `{gains.get('B', 0):.3f}`
+        - B: `{white_balance_gains.get('B', 0):.3f}`
 
         **Estimated Correlated Color Temperature (CCT)**: `{CCT:.0f}K`  
         **Tint (Δuv distance from locus)**: `{duv:.5f}`
