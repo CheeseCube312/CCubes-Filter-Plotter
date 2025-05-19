@@ -10,6 +10,8 @@ import os
 import glob
 from scipy.interpolate import interp1d
 import plotly.graph_objects as go
+from pathlib import Path
+from scipy.spatial import distance
 
 # --- Constants ---
 INTERP_GRID = np.arange(300, 1101, 5)  # 300–1100nm, 5nm step
@@ -85,6 +87,11 @@ def load_qe_files():
         df = pd.read_csv(f, sep="\t")
         for _, row in df.iterrows():
             channel = row["Channel"].strip().capitalize()
+
+            # Normalize channel names
+            channel_mapping = {"Red": "R", "Green": "G", "Blue": "B"}
+            channel = channel_mapping.get(channel, channel)
+
             brand = row["Camera Brand"].strip()
             model = row["Camera Model"].strip()
             key = f"{brand} {model}"
@@ -101,9 +108,30 @@ def load_qe_files():
             # Check if this is the default file
             if os.path.basename(f) == "Default_QE.tsv":
                 default_key = key
-
+                
     keys_sorted = sorted(qe_dict.keys())
     return keys_sorted, qe_dict, default_key
+
+# --- DEF: Load Illuminants ---
+@st.cache_data
+def load_illuminants():
+    illum_folder = "Illuminants"
+    os.makedirs(illum_folder, exist_ok=True)
+    files = glob.glob(os.path.join(illum_folder, "*.tsv"))
+    illuminants = {}
+    for f in files:
+        try:
+            df = pd.read_csv(f, sep="\t")
+            wl = df.iloc[:, 0].values.astype(float)
+            power = df.iloc[:, 1].values.astype(float)
+            interp = np.interp(INTERP_GRID, wl, power, left=0, right=0)
+            name = os.path.splitext(os.path.basename(f))[0]
+            illuminants[name] = interp
+        except Exception as e:
+            st.warning(f"Failed to load illuminant {f}: {e}")
+    return illuminants
+
+
 
 # Load QE files
 camera_keys, qe_data, default_key = load_qe_files()
@@ -180,6 +208,17 @@ else:
 selected = st.sidebar.multiselect("Select filters to plot", options=filter_display)
 show_combined = st.sidebar.checkbox("Show combined filter", value=True)
 log_stops = st.sidebar.checkbox("Display in stop-view", value=False)
+illuminants = load_illuminants()
+illum_names = list(illuminants.keys())
+if illum_names:
+    default_index = illum_names.index("D65") if "D65" in illum_names else 0
+    selected_illum_name = st.sidebar.selectbox("Scene Illuminant", illum_names, index=default_index)
+    selected_illum = illuminants[selected_illum_name]
+else:
+    st.sidebar.error("⚠️ No illuminants found. Please add .tsv files to the 'Illuminants/' folder.")
+    selected_illum_name = None
+    selected_illum = None
+
 
 
 # App title
@@ -330,6 +369,68 @@ if selected and current_qe:
 
     st.plotly_chart(fig_response, use_container_width=True)
 
+
+# === White Balance + CCT Estimate ===
+if selected and current_qe and selected_illum is not None:
+    with st.expander("📏 Estimated White Balance (CCT & Tint)", expanded=True):
+        st.markdown(f"Illuminant: **{selected_illum_name}**")
+
+        # Use combined filter or single
+        if show_combined and len(selected_indices) > 1:
+            trans = np.nanprod(np.array([filter_matrix[i] for i in selected_indices]), axis=0)
+        else:
+            trans = filter_matrix[selected_indices[0]]
+
+        # Multiply transmission × QE × illuminant per channel
+        rgb = {}
+
+        for channel, qe_curve in current_qe.items():
+            weighted = np.nan_to_num(trans * (qe_curve / 100) * selected_illum)
+            rgb[channel] = np.sum(weighted)
+
+        
+        # Normalize to G = 1 safely
+        if "G" in rgb and rgb["G"] > 0:
+            gains = {k: v / rgb["G"] for k, v in rgb.items()}
+        else:
+            st.warning("⚠️ Could not normalize RGB — missing or zero G channel.")
+            gains = {"R": 0, "G": 1, "B": 0}
+
+
+        # Convert to XYZ (sRGB primaries)
+        M = np.array([
+            [0.4124, 0.3576, 0.1805],
+            [0.2126, 0.7152, 0.0722],
+            [0.0193, 0.1192, 0.9505]
+        ])
+        vec_rgb = np.array([gains.get("R", 0), 1.0, gains.get("B", 0)])
+        XYZ = M @ vec_rgb
+        X, Y, Z = XYZ
+        total = X + Y + Z
+        x = X / total
+        y = Y / total
+
+        # Estimate CCT using McCamy's approximation
+        n = (x - 0.3320) / (y - 0.1858)
+        CCT = 449 * n**3 + 3525 * n**2 + 6823.3 * n + 5520.33
+
+        # Compute tint as distance from Planckian locus (optional rough Δuv estimate)
+        u = (4 * X) / (X + 15 * Y + 3 * Z)
+        v = (6 * Y) / (X + 15 * Y + 3 * Z)
+        duv = np.sqrt((u - 0.1978)**2 + (v - 0.4683)**2)  # approx reference locus near D65
+
+        st.markdown(f"""
+        **RGB White Balance Multipliers** (G = 1):  
+        - R: `{gains.get('R', 0):.3f}`  
+        - G: `1.000`  
+        - B: `{gains.get('B', 0):.3f}`
+
+        **Estimated Correlated Color Temperature (CCT)**: `{CCT:.0f}K`  
+        **Tint (Δuv distance from locus)**: `{duv:.5f}`
+        """)
+
+
+
  # --- QE Plotting ---
 if current_qe:
     st.subheader("Quantum Efficiency (QE) Curves")
@@ -356,4 +457,3 @@ if current_qe:
     )
 
     st.plotly_chart(fig_qe, use_container_width=True)
-
