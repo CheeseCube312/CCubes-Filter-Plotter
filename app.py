@@ -440,6 +440,9 @@ if selected and current_qe:
     g_response = np.zeros_like(INTERP_GRID, dtype=float)
     b_response = np.zeros_like(INTERP_GRID, dtype=float)
 
+    # Track peak response value
+    max_response_value = 0
+
     # Plot each selected channel and build RGB
     for channel, show in visible_channels.items():
         if not show:
@@ -450,16 +453,20 @@ if selected and current_qe:
         weighted = np.nan_to_num(trans * (qe_curve / 100))
         y_values = (weighted / gain) * 100 if apply_white_balance and gain > 0 else weighted * 100
 
+        # Update peak value
+        max_response_value = max(max_response_value, np.max(y_values))
+
+        # Plot channel curve
         channel_colors = {"R": "red", "G": "green", "B": "blue"}
         fig_response.add_trace(go.Scatter(
             x=INTERP_GRID,
             y=y_values,
             name=f"{channel} Response{' (WB)' if apply_white_balance else ''}",
             mode="lines",
-            line=dict(width=2, color=channel_colors.get(channel, None))
+            line=dict(width=2, color=channel_colors.get(channel, "gray"))
         ))
 
-        # Accumulate for RGB gradient
+        # Accumulate for RGB
         if channel == "R":
             r_response = y_values
         elif channel == "G":
@@ -467,10 +474,9 @@ if selected and current_qe:
         elif channel == "B":
             b_response = y_values
 
-    # Build RGB gradient color line
+    # Normalize RGB to 0–1, then convert to hex
     rgb = np.stack([r_response, g_response, b_response], axis=1)
-    max_val = np.max(rgb)
-    if max_val > 0:
+    if (max_val := np.max(rgb)) > 0:
         rgb = rgb / max_val
     rgb = np.clip(rgb, 0, 1)
 
@@ -480,23 +486,25 @@ if selected and current_qe:
 
     gradient_colors = [rgb_to_hex(row) for row in rgb]
 
-    # Plot flat colored line (y=100) using one color per segment
+    # Add spectrum line just above the tallest curve
+    spectrum_y = max_response_value * 1.05
     for i in range(len(INTERP_GRID) - 1):
         fig_response.add_trace(go.Scatter(
-            x=INTERP_GRID[i:i+2],
-            y=[95, 95],
+            x=[INTERP_GRID[i], INTERP_GRID[i+1] + 1e-6],
+            y=[spectrum_y, spectrum_y],
             mode="lines",
             line=dict(color=gradient_colors[i], width=15),
             showlegend=False,
             hoverinfo="skip"
         ))
 
+    # Final layout update with autoscaling
     fig_response.update_layout(
         title="Effective Sensor Response (Transmission × QE)",
         xaxis_title="Wavelength (nm)",
         yaxis_title="Response (%)",
         xaxis_range=[300, 1100],
-        yaxis_range=[0, 100],
+        yaxis_range=[0, spectrum_y * 1.05],
         showlegend=True,
         height=400
     )
@@ -504,38 +512,42 @@ if selected and current_qe:
     st.plotly_chart(fig_response, use_container_width=True)
 
 
-# --- Compute Raw RGB Response (Illuminant × QE × Transmission) ---
-rgb_response = {}
-for channel, qe_curve in current_qe.items():
-    valid = ~np.isnan(trans) & ~np.isnan(qe_curve) & ~np.isnan(selected_illum)
-    if not np.any(valid):
-        st.warning(f"⚠️ No valid data for channel {channel}.")
-        rgb_response[channel] = np.nan
-        continue
 
-    weighted = trans[valid] * (qe_curve[valid] / 100) * selected_illum[valid]
-    rgb_response[channel] = np.sum(weighted)
+if selected and current_qe and selected_illum is not None and trans is not None:
+    # --- Compute Raw RGB Response (Illuminant × QE × Transmission) ---
+    rgb_response = {}
+    for channel, qe_curve in current_qe.items():
+        valid = ~np.isnan(trans) & ~np.isnan(qe_curve) & ~np.isnan(selected_illum)
+        if not np.any(valid):
+            st.warning(f"⚠️ No valid data for channel {channel}.")
+            rgb_response[channel] = np.nan
+            continue
 
-# --- Normalize to Green (Camera-Style Auto White Balance) ---
-g = rgb_response.get("G", 1.0)
-if g > 1e-6:
-    white_balance_gains = {
-        "R": rgb_response.get("R", 0) / g,
-        "G": 1.0,
-        "B": rgb_response.get("B", 0) / g,
-    }
+        weighted = trans[valid] * (qe_curve[valid] / 100) * selected_illum[valid]
+        rgb_response[channel] = np.sum(weighted)
+
+    # --- Normalize to Green (Camera-Style Auto White Balance) ---
+    g = rgb_response.get("G", 1.0)
+    if g > 1e-6:
+        white_balance_gains = {
+            "R": rgb_response.get("R", 0) / g,
+            "G": 1.0,
+            "B": rgb_response.get("B", 0) / g,
+        }
+    else:
+        white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
+        st.warning("⚠️ Green channel too low — fallback white balance used.")
+
+    # --- Save WB ---
+    st.session_state["white_balance_gains"] = white_balance_gains
+
+    # --- Show WB Gains ---
+    st.markdown(f"""
+    **RGB White Balance Multipliers** (Green = 1.000):  
+     R: `{white_balance_gains['R']:.3f}`   G: `1.000`   B: `{white_balance_gains['B']:.3f}`
+    """)
 else:
-    white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
-    st.warning("⚠️ Green channel too low — fallback white balance used.")
-
-# --- Save WB ---
-st.session_state["white_balance_gains"] = white_balance_gains
-
-# --- Show WB Gains ---
-st.markdown(f"""
-**RGB White Balance Multipliers** (Green = 1.000):  
- R: `{white_balance_gains['R']:.3f}`   G: `1.000`   B: `{white_balance_gains['B']:.3f}`
-""")
+    st.info("ℹ️ Select filters.")
 
 
 # --- QE Plotting ---
