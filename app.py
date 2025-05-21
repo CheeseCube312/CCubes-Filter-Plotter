@@ -3,155 +3,162 @@
 #I don't know how to code so this was made with lots of AI help
 #ChatGPT, then VS Code + Ollama + Continue.dev
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import os
 import glob
-from scipy.interpolate import interp1d
-import plotly.graph_objects as go
+import os
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+from scipy.interpolate import interp1d
 from scipy.spatial import distance
 
-# --- Constants ---
-INTERP_GRID = np.arange(300, 1101, 5)  # 300–1100nm, 5nm step
 
-# --- App Setup ---
+# --- Configuration ---
+
+
+INTERP_GRID = np.arange(300, 1101, 5)  # Wavelength range: 300–1100nm, 5nm step
+
 st.set_page_config(page_title="CheeseCubes Filter Plotter", layout="wide")
 
-# --- Create Sidebar ---
-st.sidebar.header("Filter Plotter")
-if st.sidebar.button("🔄 Refresh Filters"):
-    st.cache_data.clear()
-    st.rerun()
+# --- Loaders ---
 
-# --- DEF: Load Data from filters_data folder ---
+#def LOAD filter data
 @st.cache_data
-def load_data():
+def load_filter_data():
+    """
+    Load all .tsv files from 'filters_data' and return combined DataFrame and wavelength list.
+    """
     folder = "filters_data"
     os.makedirs(folder, exist_ok=True)
-    dfs = []
-    all_wls = set()
     files = glob.glob(os.path.join(folder, "*.tsv"))
+
+    dfs, all_wls = [], set()
 
     for path in files:
         try:
-            tmp = pd.read_csv(path, sep="\t", header=0)
-            tmp.columns = [str(c).strip() for c in tmp.columns]
-            wl_cols = [c for c in tmp.columns if c.isdigit()]
-            
-            if "Filter Number" not in tmp.columns:
+            df = pd.read_csv(path, sep="\t")
+            df.columns = [str(c).strip() for c in df.columns]
+            wl_cols = [col for col in df.columns if col.isdigit()]
+
+            if "Filter Number" not in df.columns:
                 continue
 
-            if "Hex Color" not in tmp.columns:
-                tmp["Hex Color"] = "#1f77b4"
-            tmp["Hex"] = tmp["Hex Color"]
+            if "Hex Color" not in df.columns:
+                df["Hex Color"] = "#1f77b4"
+            df["Hex"] = df["Hex Color"]
+            df["Manufacturer"] = df.get("Manufacturer", "Unknown")
+            df["source_file"] = os.path.basename(path)
 
-            if "Manufacturer" not in tmp.columns:
-                tmp["Manufacturer"] = "Unknown"
+            all_wls.update(map(int, wl_cols))
+            dfs.append(df)
 
-            all_wls.update(int(w) for w in wl_cols)
-            tmp["source_file"] = os.path.basename(path)
-            dfs.append(tmp)
         except Exception as e:
-            st.warning(f"Failed to load `{os.path.basename(path)}`: {e}")
+            st.warning(f"⚠️ Failed to load filter file '{os.path.basename(path)}': {e}")
 
     if not dfs:
         return pd.DataFrame(), []
-    df = pd.concat(dfs, ignore_index=True)
-    df["Filter Number"] = df["Filter Number"].astype(str)
-    df["Filter Name"] = df.get("Filter Name", df["Filter Number"])
-    df["is_lee"] = df["source_file"].str.contains("LeeFilters", case=False)
-    df = df.copy()  # Defragment the DataFrame to prevent the warning
 
-    return df, sorted(all_wls)
+    combined = pd.concat(dfs, ignore_index=True).copy()
+    combined["Filter Number"] = combined["Filter Number"].astype(str)
+    combined["Filter Name"] = combined.get("Filter Name", combined["Filter Number"])
+    combined["is_lee"] = combined["source_file"].str.contains("LeeFilters", case=False)
 
-df, wavelengths = load_data()
+    return combined, sorted(all_wls)
+
+
+
+df, wavelengths = load_filter_data()
 if df.empty:
     st.stop()
+    st.error("No filter data found. Please add .tsv files to the 'filters_data/' folder.")
 
 filter_display = df["Filter Name"] + " (" + df["Filter Number"] + ", " + df["Manufacturer"] + ")"
 display_to_index = {name: i for i, name in enumerate(filter_display)}
 
-
-
-# -- DEF: Load data from QE_data folder --
+#def LOAD QE data
 @st.cache_data
-def load_qe_files():
-    qe_folder = "QE_data"
-    files = glob.glob(os.path.join(qe_folder, "*.tsv"))
+def load_qe_data():
+    """
+    Load sensor quantum efficiency (QE) curves from 'QE_data'.
+    """
+    def normalize_channel(name):
+        return {"red": "R", "green": "G", "blue": "B"}.get(name.strip().lower(), name.strip())
+
+    folder = "QE_data"
+    os.makedirs(folder, exist_ok=True)
+    files = glob.glob(os.path.join(folder, "*.tsv"))
+
     qe_dict = {}
     default_key = None
 
-    for f in files:
-        df = pd.read_csv(f, sep="\t")
-        for _, row in df.iterrows():
-            channel = row["Channel"].strip().capitalize()
-
-            # Normalize channel names
-            channel_mapping = {"Red": "R", "Green": "G", "Blue": "B"}
-            channel = channel_mapping.get(channel, channel)
-
-            brand = row["Camera Brand"].strip()
-            model = row["Camera Model"].strip()
-            key = f"{brand} {model}"
-
-            # Wavelength data
-            spectrum = row.iloc[3:].astype(float).values
+    for path in files:
+        try:
+            df = pd.read_csv(path, sep="\t")
             wavelengths = df.columns[3:].astype(float)
-            interp_curve = np.interp(INTERP_GRID, wavelengths, spectrum, left=0, right=0)
 
-            if key not in qe_dict:
-                qe_dict[key] = {}
-            qe_dict[key][channel] = interp_curve
+            for _, row in df.iterrows():
+                channel = normalize_channel(row["Channel"])
+                brand = row["Camera Brand"].strip()
+                model = row["Camera Model"].strip()
+                key = f"{brand} {model}"
 
-            # Check if this is the default file
-            if os.path.basename(f) == "Default_QE.tsv":
-                default_key = key
-                
-    keys_sorted = sorted(qe_dict.keys())
-    return keys_sorted, qe_dict, default_key
+                spectrum = row.iloc[3:].astype(float).values
+                interp_curve = np.interp(INTERP_GRID, wavelengths, spectrum, left=0, right=0)
 
-# --- DEF: Load Illuminants ---
+                qe_dict.setdefault(key, {})[channel] = interp_curve
+
+                if os.path.basename(path) == "Default_QE.tsv":
+                    default_key = key
+
+        except Exception as e:
+            st.warning(f"⚠️ Failed to load QE file '{os.path.basename(path)}': {e}")
+
+    return sorted(qe_dict.keys()), qe_dict, default_key
+
+#def LOAD Illuminants
 @st.cache_data
 def load_illuminants():
-    illum_folder = "Illuminants"
-    os.makedirs(illum_folder, exist_ok=True)
-    files = glob.glob(os.path.join(illum_folder, "*.tsv"))
+    """
+    Load spectral power distribution data for light sources from 'Illuminants'.
+    """
+    folder = "Illuminants"
+    os.makedirs(folder, exist_ok=True)
+
     illuminants = {}
-    for f in files:
+    for path in glob.glob(os.path.join(folder, "*.tsv")):
         try:
-            df = pd.read_csv(f, sep="\t")
-            wl = df.iloc[:, 0].values.astype(float)
-            power = df.iloc[:, 1].values.astype(float)
-            interp = np.interp(INTERP_GRID, wl, power, left=0, right=0)
-            name = os.path.splitext(os.path.basename(f))[0]
-            illuminants[name] = interp
+            df = pd.read_csv(path, sep="\t")
+
+            if df.shape[1] < 2:
+                st.warning(f"⚠️ Skipping '{path}': expected at least two columns.")
+                continue
+
+            wl = df.iloc[:, 0].astype(float).values
+            power = df.iloc[:, 1].astype(float).values
+            interp_curve = np.interp(INTERP_GRID, wl, power, left=0, right=0)
+
+            name = Path(path).stem
+            illuminants[name] = interp_curve
+
         except Exception as e:
-            st.warning(f"Failed to load illuminant {f}: {e}")
+            st.warning(f"⚠️ Failed to load illuminant '{path}': {e}")
+
     return illuminants
 
+# --- Pre-Processing ---
 
-
-# Load QE files
-camera_keys, qe_data, default_key = load_qe_files()
-
-# Set default selection
-default_index = camera_keys.index(default_key) + 1 if default_key in camera_keys else 0
-
-# Sidebar selector
-selected_camera = st.sidebar.selectbox("Sensor QE Profile", ["None"] + camera_keys, index=default_index)
-
-# Extract selected QE curves
-if selected_camera != "None":
-    current_qe = qe_data[selected_camera]
-else:
-    current_qe = None
-
-
-
-# --- DEF: Interpolation ---
-def interpolate_filters(df, wavelengths):
+#def interpolate filter curves
+def interpolate_filter_curves(df: pd.DataFrame, wavelengths: list[int]) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Interpolate transmission curves of filters to a uniform wavelength grid.
+    Applies extrapolation rules for Lee filters.
+    
+    Returns:
+        - matrix: NxM array of interpolated transmissions
+        - extrapolated_masks: NxM boolean array indicating extrapolated regions
+    """
     matrix = []
     extrapolated_masks = []
 
@@ -160,64 +167,119 @@ def interpolate_filters(df, wavelengths):
         y = [row[str(wl)] / 100 for wl in x]
 
         if len(x) < 2:
+            # Not enough data to interpolate
             matrix.append(np.full_like(INTERP_GRID, np.nan, dtype=np.float32))
             extrapolated_masks.append(np.full_like(INTERP_GRID, False, dtype=bool))
             continue
 
-        f = interp1d(x, y, kind='linear', bounds_error=False, fill_value="extrapolate")
+        f = interp1d(x, y, kind="linear", bounds_error=False, fill_value="extrapolate")
         interpolated = f(INTERP_GRID)
+        mask = np.zeros_like(INTERP_GRID, dtype=bool)
 
-        extrapolated_mask = np.zeros_like(INTERP_GRID, dtype=bool)
-
-        if row["is_lee"]:
+        if row.get("is_lee", False):
+            # Apply special extrapolation handling for Lee filters
             last_measured = max(x)
             to_800 = (INTERP_GRID > last_measured) & (INTERP_GRID <= 800)
             beyond_800 = INTERP_GRID > 800
             below_400 = INTERP_GRID < 400
 
             start_val = interpolated[INTERP_GRID == last_measured][0]
-            interp_to_800 = np.linspace(start_val, 0.9, to_800.sum())
-            interpolated[to_800] = interp_to_800
+            interpolated[to_800] = np.linspace(start_val, 0.9, to_800.sum())
             interpolated[beyond_800] = 0.9
             interpolated[below_400] = np.nan
 
-            extrapolated_mask[to_800 | beyond_800 | below_400] = True
+            mask[to_800 | beyond_800 | below_400] = True
 
         matrix.append(interpolated)
-        extrapolated_masks.append(extrapolated_mask)
+        extrapolated_masks.append(mask)
 
     return np.array(matrix), np.array(extrapolated_masks)
 
-filter_matrix, extrapolated_masks = interpolate_filters(df, wavelengths)
-
-# DEF white balance gains normalized to green
-
-def get_white_balance_gains(rgb_estimates: dict) -> dict:
-    """Compute white balance gains normalized to green."""
-    if "G" in rgb_estimates and rgb_estimates["G"] > 0:
-        return {k: v / rgb_estimates["G"] for k, v in rgb_estimates.items()}
-    else:
-        return {"R": 0, "G": 1.0, "B": 0}
+# --- Interpolate all filters ---
+filter_matrix, extrapolated_masks = interpolate_filter_curves(df, wavelengths)
 
 
-# --- Dynamic QE weighting: fallback to default mono QE if no camera selected ---
-if current_qe:
-    # Use average of all selected QE channels
-    qe_curves = np.array([curve for _, curve in current_qe.items()])
-    sensor_qe = np.nanmean(qe_curves, axis=0)
-else:
-    # Default mono curve
-    qe_nm = np.array([300, 350, 400, 450, 500, 550, 600, 650, 700, 750,
-                      800, 850, 900, 950, 1000, 1050, 1100])
-    qe_val = np.array([0.00, 0.01, 0.10, 0.30, 0.65, 1.00, 0.95, 0.85, 0.70, 0.50,
-                       0.35, 0.25, 0.15, 0.08, 0.03, 0.01, 0.00])
-    sensor_qe = interp1d(qe_nm, qe_val, bounds_error=False, fill_value=0.0)(INTERP_GRID)
+#def calculate combined transmission
+def get_combined_transmission(indices, filter_matrix, combine=True):
+    if combine and len(indices) > 1:
+        stack = np.array([filter_matrix[i] for i in indices])
+        combined = np.nanprod(stack, axis=0)
+        combined[np.any(np.isnan(stack), axis=0)] = np.nan
+        return combined
+    return filter_matrix[indices[0]]
+
+
+# Core computation
+
+    """
+    Compute per-channel weighted response from transmission, QE, and illuminant curves.
+    If `nan_safe` is True, fills NaNs with 0. Otherwise, skips them using masking.
+    """
+def compute_weighted_response(trans, illum, current_qe, nan_safe=True):
+    responses = {}
+    for ch, qe in current_qe.items():
+        if nan_safe:
+            responses[ch] = np.sum(np.nan_to_num(trans * (qe / 100) * illum))
+        else:
+            valid = ~np.isnan(trans) & ~np.isnan(qe) & ~np.isnan(illum)
+            if not np.any(valid):
+                responses[ch] = np.nan
+                continue
+            responses[ch] = np.sum(trans[valid] * (qe[valid] / 100) * illum[valid])
+    return responses
+
+# Normalize RGB dict so G = 1.0
+def normalize_rgb_to_green(rgb: dict[str, float]) -> dict[str, float]:
+    """
+    Normalize RGB dict so G = 1.0. If G is too small, defaults to safe values.
+    """
+    g = rgb.get("G", 0)
+    if g > 1e-6:
+        return {k: v / g for k, v in rgb.items()}
+    return {"R": 0.0, "G": 1.0, "B": 0.0}
+
+
+# Estimate correlated color temperature (CCT) and tint from normalized white balance
+def compute_cct_and_tint(wb_gains):
+    vec_rgb = np.array([wb_gains.get("R", 0), 1.0, wb_gains.get("B", 0)])
+    M = np.array([[0.4124, 0.3576, 0.1805],
+                  [0.2126, 0.7152, 0.0722],
+                  [0.0193, 0.1192, 0.9505]])
+    XYZ = M @ vec_rgb
+    X, Y, Z = XYZ
+    S = X + Y + Z
+    if S == 0:
+        return None
+
+    x, y = X / S, Y / S
+    n = (x - 0.3320) / (y - 0.1858)
+    CCT = 449 * n**3 + 3525 * n**2 + 6823.3 * n + 5520.33
+
+    denom = X + 15 * Y + 3 * Z
+    if denom == 0:
+        return CCT, None, None, None
+
+    u, v = (4 * X) / denom, (6 * Y) / denom
+    duv = np.sqrt((u - 0.1978)**2 + (v - 0.4683)**2)
+    tone_units = duv / 0.0025
+    tone_direction = "Green" if v > 0.4683 else "Magenta"
+    return CCT, duv, tone_units, tone_direction
+
+# Inline Code starts here
 
 
 # --- Plotting UI Sidebar ---
+st.sidebar.header("Filter Plotter")
 selected = st.sidebar.multiselect("Select filters to plot", options=filter_display)
 show_combined = st.sidebar.checkbox("Show combined filter", value=True)
 log_stops = st.sidebar.checkbox("Display in stop-view", value=False)
+
+if st.sidebar.button("🔄 Refresh Filters"):
+    st.cache_data.clear()
+    st.rerun()
+
+
+# Load illuminants
 illuminants = load_illuminants()
 illum_names = list(illuminants.keys())
 if illum_names:
@@ -229,7 +291,25 @@ else:
     selected_illum_name = None
     selected_illum = None
 
+# --- Sensor QE Profile Selection ---
+camera_keys, qe_data, default_key = load_qe_data()
+default_index = camera_keys.index(default_key) + 1 if default_key in camera_keys else 0
 
+selected_camera = st.sidebar.selectbox(
+    "Sensor QE Profile", ["None"] + camera_keys, index=default_index
+)
+current_qe = qe_data.get(selected_camera) if selected_camera != "None" else None
+
+
+# Dynamic QE curve
+if current_qe:
+    # Average all selected QE curves
+    qe_curves = np.array([curve for _, curve in current_qe.items()])
+    sensor_qe = np.nanmean(qe_curves, axis=0)
+else:
+    # This should rarely happen — maybe warn?
+    st.warning("No QE curves selected. Using flat QE response.")
+    sensor_qe = np.ones_like(INTERP_GRID)
 
 # App title
 st.markdown(
@@ -241,21 +321,23 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
-
+#--- Filters and Plotting ---
 if selected:
     selected_indices = [display_to_index[name] for name in selected]
 
     # --- Combined Filter ---
-    combined = None  # Initialize outside to use later
-    if show_combined and len(selected_indices) > 1:
-        stack = np.array([filter_matrix[i] for i in selected_indices])
-        combined = np.nanprod(stack, axis=0)
-        combined[np.any(np.isnan(stack), axis=0)] = np.nan
-        combined = np.clip(combined, 1e-6, 1.0)
+    is_combined = show_combined and len(selected_indices) > 1
+    combined = None
 
-    # --- Estimate light loss (show this up top) ---
-    if show_combined and len(selected_indices) > 1:
+    if is_combined:
+        trans = get_combined_transmission(selected_indices, filter_matrix, combine=True)
+        combined = np.clip(trans, 1e-6, 1.0)
+    else:
+        trans = filter_matrix[selected_indices[0]]
+        combined = None
+
+    # --- Estimate light loss ---
+    if is_combined:
         trans = combined
         label = "Combined"
     else:
@@ -264,6 +346,11 @@ if selected:
 
     valid = ~np.isnan(trans)
     if np.any(valid):
+        # Fallback in case QE is invalid
+        if not np.any(sensor_qe):
+            st.warning("⚠️ Sensor QE curve appears empty or invalid. Using default flat QE.")
+            sensor_qe = np.ones_like(INTERP_GRID)
+
         avg_trans = np.average(np.clip(trans[valid], 1e-6, 1.0), weights=sensor_qe[valid])
         effective_stops = -np.log2(avg_trans)
         st.markdown(
@@ -276,7 +363,6 @@ if selected:
     # --- Create plot ---
     fig = go.Figure()
 
-    # --- Plot each selected filter ---
     for idx in selected_indices:
         row = df.iloc[idx]
         transmission = np.clip(filter_matrix[idx], 1e-6, 1.0)
@@ -301,8 +387,7 @@ if selected:
                 showlegend=False
             ))
 
-    # --- Plot combined line ---
-    if combined is not None:
+    if is_combined and combined is not None:
         combined_y = np.log2(combined) if log_stops else combined * 100
         fig.add_trace(go.Scatter(
             x=INTERP_GRID,
@@ -312,7 +397,6 @@ if selected:
             line=dict(color="black", width=2)
         ))
 
-    # --- Plot formatting ---
     fig.update_layout(
         title="Combined Filter Response",
         xaxis_title="Wavelength (nm)",
@@ -326,12 +410,7 @@ if selected:
         showlegend=True
     )
 
-    # --- Show plot ---
     st.plotly_chart(fig, use_container_width=True)
-
-else:
-    st.write("No filter selected right now.")
-
 
 # --- Show sensor-weighted response (QE × Transmission) ---
 if selected and current_qe:
@@ -340,52 +419,76 @@ if selected and current_qe:
     fig_response = go.Figure()
     apply_white_balance = st.checkbox("Apply White Balance to Response", value=False)
 
-    trans = None
-    if show_combined and len(selected_indices) > 1:
-        stack = np.array([filter_matrix[i] for i in selected_indices])
-        trans = np.nanprod(stack, axis=0)
-        trans[np.any(np.isnan(stack), axis=0)] = np.nan
-    else:
-        trans = filter_matrix[selected_indices[0]]
+    # Determine transmission using helper
+    trans = get_combined_transmission(selected_indices, filter_matrix, combine=show_combined)
 
-    # Multiply transmission × QE × illuminant per channel
-    rgb = {}
-    for channel, qe_curve in current_qe.items():
-        weighted = np.nan_to_num(trans * (qe_curve / 100) * selected_illum)
-        rgb[channel] = np.sum(weighted)
+    # Default WB gains
+    white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
+    if apply_white_balance:
+        white_balance_gains = st.session_state.get("white_balance_gains", white_balance_gains)
 
-# Default: identity white balance
-white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
-
-# Override if WB is toggled on and session has valid gains
-if apply_white_balance:
-    white_balance_gains = st.session_state.get(
-        "white_balance_gains",
-        white_balance_gains  # fallback to default (1.0 gain for all)
-    )
-
-
-    # Horizontal layout for channel toggles
+    # Channel toggle layout
     channel_names = list(current_qe.keys())
     cols = st.columns(len(channel_names))
-
-    for i, (channel, qe_curve) in enumerate(current_qe.items()):
+    visible_channels = {}
+    for i, channel in enumerate(channel_names):
         with cols[i]:
-            show = st.checkbox(f"{channel} channel", value=True, key=f"resp_{channel}")
-            if not show:
-                continue
+            visible_channels[channel] = st.checkbox(f"{channel} channel", value=True, key=f"resp_{channel}")
 
-        gain = white_balance_gains.get(channel, 1.0) if apply_white_balance else 1.0
+    # Initialize RGB response arrays
+    r_response = np.zeros_like(INTERP_GRID, dtype=float)
+    g_response = np.zeros_like(INTERP_GRID, dtype=float)
+    b_response = np.zeros_like(INTERP_GRID, dtype=float)
 
-        weighted = np.nan_to_num(trans * (qe_curve / 100)) * gain
-        y_values = weighted * 100  # Keep in percent scale
+    # Plot each selected channel and build RGB
+    for channel, show in visible_channels.items():
+        if not show:
+            continue
 
+        qe_curve = current_qe[channel]
+        gain = white_balance_gains.get(channel, 1.0)
+        weighted = np.nan_to_num(trans * (qe_curve / 100))
+        y_values = (weighted / gain) * 100 if apply_white_balance and gain > 0 else weighted * 100
+
+        channel_colors = {"R": "red", "G": "green", "B": "blue"}
         fig_response.add_trace(go.Scatter(
             x=INTERP_GRID,
             y=y_values,
             name=f"{channel} Response{' (WB)' if apply_white_balance else ''}",
             mode="lines",
-            line=dict(width=2)
+            line=dict(width=2, color=channel_colors.get(channel, None))
+        ))
+
+        # Accumulate for RGB gradient
+        if channel == "R":
+            r_response = y_values
+        elif channel == "G":
+            g_response = y_values
+        elif channel == "B":
+            b_response = y_values
+
+    # Build RGB gradient color line
+    rgb = np.stack([r_response, g_response, b_response], axis=1)
+    max_val = np.max(rgb)
+    if max_val > 0:
+        rgb = rgb / max_val
+    rgb = np.clip(rgb, 0, 1)
+
+    def rgb_to_hex(row):
+        r, g, b = (row * 255).astype(int)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    gradient_colors = [rgb_to_hex(row) for row in rgb]
+
+    # Plot flat colored line (y=100) using one color per segment
+    for i in range(len(INTERP_GRID) - 1):
+        fig_response.add_trace(go.Scatter(
+            x=INTERP_GRID[i:i+2],
+            y=[95, 95],
+            mode="lines",
+            line=dict(color=gradient_colors[i], width=15),
+            showlegend=False,
+            hoverinfo="skip"
         ))
 
     fig_response.update_layout(
@@ -401,89 +504,64 @@ if apply_white_balance:
     st.plotly_chart(fig_response, use_container_width=True)
 
 
-# === White Balance + CCT Estimate ===
-if selected and current_qe and selected_illum is not None:
-    with st.expander("📏 Estimated White Balance (CCT & Tint)", expanded=True):
-        st.markdown(f"Illuminant: **{selected_illum_name}**")
+# --- Compute Raw RGB Response (Illuminant × QE × Transmission) ---
+rgb_response = {}
+for channel, qe_curve in current_qe.items():
+    valid = ~np.isnan(trans) & ~np.isnan(qe_curve) & ~np.isnan(selected_illum)
+    if not np.any(valid):
+        st.warning(f"⚠️ No valid data for channel {channel}.")
+        rgb_response[channel] = np.nan
+        continue
 
-        # Use combined filter or single
-        if show_combined and len(selected_indices) > 1:
-            trans = np.nanprod(np.array([filter_matrix[i] for i in selected_indices]), axis=0)
-        else:
-            trans = filter_matrix[selected_indices[0]]
+    weighted = trans[valid] * (qe_curve[valid] / 100) * selected_illum[valid]
+    rgb_response[channel] = np.sum(weighted)
 
-        # Compute white balance gains (R and B scaled relative to G = 1.0)
-        rgb_response = {}
-        for channel, qe_curve in current_qe.items():
-            weighted = np.nan_to_num(trans * (qe_curve / 100) * selected_illum)
-            rgb_response[channel] = np.sum(weighted)
+# --- Normalize to Green (Camera-Style Auto White Balance) ---
+g = rgb_response.get("G", 1.0)
+if g > 1e-6:
+    white_balance_gains = {
+        "R": rgb_response.get("R", 0) / g,
+        "G": 1.0,
+        "B": rgb_response.get("B", 0) / g,
+    }
+else:
+    white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
+    st.warning("⚠️ Green channel too low — fallback white balance used.")
 
-        # Normalize to green channel
-        white_balance_gains = {
-            "R": rgb_response.get("R", 1.0) / rgb_response.get("G", 1.0),
-            "G": 1.0,
-            "B": rgb_response.get("B", 1.0) / rgb_response.get("G", 1.0),
-        }
+# --- Save WB ---
+st.session_state["white_balance_gains"] = white_balance_gains
 
-
-
-        # Convert to XYZ (sRGB primaries)
-        M = np.array([
-            [0.4124, 0.3576, 0.1805],
-            [0.2126, 0.7152, 0.0722],
-            [0.0193, 0.1192, 0.9505]
-        ])
-        vec_rgb = np.array([white_balance_gains.get("R", 0), 1.0, white_balance_gains.get("B", 0)])
-        XYZ = M @ vec_rgb
-        X, Y, Z = XYZ
-        total = X + Y + Z
-        x = X / total
-        y = Y / total
-
-        # Estimate CCT using McCamy's approximation
-        n = (x - 0.3320) / (y - 0.1858)
-        CCT = 449 * n**3 + 3525 * n**2 + 6823.3 * n + 5520.33
-
-        # Compute tint as distance from Planckian locus (optional rough Δuv estimate)
-        u = (4 * X) / (X + 15 * Y + 3 * Z)
-        v = (6 * Y) / (X + 15 * Y + 3 * Z)
-        duv = np.sqrt((u - 0.1978)**2 + (v - 0.4683)**2)  # approx reference locus near D65
-
-        st.markdown(f"""
-        **RGB White Balance Multipliers** (G = 1):  
-        - R: `{white_balance_gains.get('R', 0):.3f}`  
-        - G: `1.000`  
-        - B: `{white_balance_gains.get('B', 0):.3f}`
-
-        **Estimated Correlated Color Temperature (CCT)**: `{CCT:.0f}K`  
-        **Tint (Δuv distance from locus)**: `{duv:.5f}`
-        """)
+# --- Show WB Gains ---
+st.markdown(f"""
+**RGB White Balance Multipliers** (Green = 1.000):  
+ R: `{white_balance_gains['R']:.3f}`   G: `1.000`   B: `{white_balance_gains['B']:.3f}`
+""")
 
 
-
- # --- QE Plotting ---
+# --- QE Plotting ---
 if current_qe:
-    st.subheader("Quantum Efficiency (QE) Curves")
+    with st.expander("Sensors Quantum Efficiency (QE) Curves", expanded=False):
+        fig_qe = go.Figure()
 
-    fig_qe = go.Figure()
+        for channel, qe_curve in current_qe.items():
+            channel_colors = {"R": "red", "G": "green", "B": "blue"}
+            fig_qe.add_trace(go.Scatter(
+                x=INTERP_GRID,
+                y=qe_curve,
+                name=f"{channel} Channel",
+                mode="lines",
+                line=dict(width=2, color=channel_colors.get(channel, None))
+            ))
 
-    for channel, qe_curve in current_qe.items():
-        fig_qe.add_trace(go.Scatter(
-            x=INTERP_GRID,
-            y=qe_curve,
-            name=f"{channel} Channel",
-            mode="lines",
-            line=dict(width=2)
-        ))
 
-    fig_qe.update_layout(
-        title=f"Quantum Efficiency: {selected_camera}",
-        xaxis_title="Wavelength (nm)",
-        yaxis_title="QE (%)",
-        xaxis_range=[300, 1100],
-        yaxis_range=[0, 100],
-        showlegend=True,
-        height=400
-    )
+        fig_qe.update_layout(
+            title=f"Quantum Efficiency: {selected_camera or 'Unknown Camera'}",
+            xaxis_title="Wavelength (nm)",
+            yaxis_title="QE (%)",
+            xaxis_range=[300, 1100],
+            yaxis_range=[0, 100],
+            showlegend=True,
+            height=400
+        )
 
-    st.plotly_chart(fig_qe, use_container_width=True)
+        st.plotly_chart(fig_qe, use_container_width=True)
