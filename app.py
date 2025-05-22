@@ -6,7 +6,6 @@
 import glob
 import os
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -14,12 +13,8 @@ import streamlit as st
 from scipy.interpolate import interp1d
 from scipy.spatial import distance
 
-
 # --- Configuration ---
-
-
 INTERP_GRID = np.arange(300, 1101, 5)  # Wavelength range: 300–1100nm, 5nm step
-
 st.set_page_config(page_title="CheeseCubes Filter Plotter", layout="wide")
 
 # --- Loaders ---
@@ -149,12 +144,11 @@ def load_illuminants():
 
 # --- Pre-Processing ---
 
-#def interpolate filter curves
 def interpolate_filter_curves(df: pd.DataFrame, wavelengths: list[int]) -> tuple[np.ndarray, np.ndarray]:
     """
     Interpolate transmission curves of filters to a uniform wavelength grid.
-    Applies extrapolation rules for Lee filters.
-    
+    For Lee filters, mark regions beyond 700nm as extrapolated for visual styling only.
+
     Returns:
         - matrix: NxM array of interpolated transmissions
         - extrapolated_masks: NxM boolean array indicating extrapolated regions
@@ -172,30 +166,19 @@ def interpolate_filter_curves(df: pd.DataFrame, wavelengths: list[int]) -> tuple
             extrapolated_masks.append(np.full_like(INTERP_GRID, False, dtype=bool))
             continue
 
-        f = interp1d(x, y, kind="linear", bounds_error=False, fill_value="extrapolate")
+        f = interp1d(x, y, kind="linear", bounds_error=False, fill_value=np.nan)
         interpolated = f(INTERP_GRID)
         mask = np.zeros_like(INTERP_GRID, dtype=bool)
 
         if row.get("is_lee", False):
-            # Apply special extrapolation handling for Lee filters
-            last_measured = max(x)
-            to_800 = (INTERP_GRID > last_measured) & (INTERP_GRID <= 800)
-            beyond_800 = INTERP_GRID > 800
-            below_400 = INTERP_GRID < 400
-
-            start_val = interpolated[INTERP_GRID == last_measured][0]
-            interpolated[to_800] = np.linspace(start_val, 0.9, to_800.sum())
-            interpolated[beyond_800] = 0.9
-            interpolated[below_400] = np.nan
-
-            mask[to_800 | beyond_800 | below_400] = True
+            # Mark region above 700nm for dashed line styling
+            mask = INTERP_GRID > 700
 
         matrix.append(interpolated)
         extrapolated_masks.append(mask)
 
     return np.array(matrix), np.array(extrapolated_masks)
 
-# --- Interpolate all filters ---
 filter_matrix, extrapolated_masks = interpolate_filter_curves(df, wavelengths)
 
 
@@ -239,6 +222,7 @@ def normalize_rgb_to_green(rgb: dict[str, float]) -> dict[str, float]:
     return {"R": 0.0, "G": 1.0, "B": 0.0}
 
 
+
 # Estimate correlated color temperature (CCT) and tint from normalized white balance
 def compute_cct_and_tint(wb_gains):
     vec_rgb = np.array([wb_gains.get("R", 0), 1.0, wb_gains.get("B", 0)])
@@ -265,12 +249,27 @@ def compute_cct_and_tint(wb_gains):
     tone_direction = "Green" if v > 0.4683 else "Magenta"
     return CCT, duv, tone_units, tone_direction
 
-# Inline Code starts here
+# ----Inline Code starts here
 
 
-# --- Plotting UI Sidebar ---
+# --- Sidebar Filter Plotter ---
 st.sidebar.header("Filter Plotter")
 selected = st.sidebar.multiselect("Select filters to plot", options=filter_display)
+
+# --- Sidebar Filter Multipliers ---
+filter_multipliers = {}
+if selected:
+    with st.sidebar.expander("📦 Set Filter Stack Counts"):
+        for name in selected:
+            filter_multipliers[name] = st.number_input(
+                f"{name}",
+                min_value=1,
+                max_value=5,
+                value=1,
+                step=1,
+                key=f"mult_{name}"
+            )
+# --- Sidebar show combined filter + display in stop view + refresh filters
 show_combined = st.sidebar.checkbox("Show combined filter", value=True)
 log_stops = st.sidebar.checkbox("Display in stop-view", value=False)
 
@@ -323,7 +322,12 @@ st.markdown(
 
 #--- Filters and Plotting ---
 if selected:
-    selected_indices = [display_to_index[name] for name in selected]
+    # Expand indices based on multiplier count
+    selected_indices = []
+    for name in selected:
+        idx = display_to_index[name]
+        count = filter_multipliers.get(name, 1)
+        selected_indices.extend([idx] * count)
 
     # --- Combined Filter ---
     is_combined = show_combined and len(selected_indices) > 1
@@ -413,14 +417,19 @@ if selected:
     st.plotly_chart(fig, use_container_width=True)
 
 # --- Show sensor-weighted response (QE × Transmission) ---
-if selected and current_qe:
+if current_qe:
+
     st.subheader("Sensor-Weighted Response (QE × Transmission)")
 
     fig_response = go.Figure()
     apply_white_balance = st.checkbox("Apply White Balance to Response", value=False)
 
     # Determine transmission using helper
-    trans = get_combined_transmission(selected_indices, filter_matrix, combine=show_combined)
+    if selected:
+        trans = get_combined_transmission(selected_indices, filter_matrix, combine=show_combined)
+    else:
+        trans = np.ones_like(INTERP_GRID)  # Identity multiplier when no filters selected
+
 
     # Default WB gains
     white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
@@ -478,7 +487,10 @@ if selected and current_qe:
     rgb = np.stack([r_response, g_response, b_response], axis=1)
     if (max_val := np.max(rgb)) > 0:
         rgb = rgb / max_val
-    rgb = np.clip(rgb, 0, 1)
+
+    # Add a small minimum to each channel to prevent 0s from creating overly saturated artifacts
+    rgb = np.clip(rgb, 1/255, 1)  # Prevents any channel from becoming pure zero
+
 
     def rgb_to_hex(row):
         r, g, b = (row * 255).astype(int)
@@ -538,14 +550,15 @@ if selected and current_qe and selected_illum is not None and trans is not None:
         white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
         st.warning("⚠️ Green channel too low — fallback white balance used.")
 
-    # --- Save WB ---
+    # --- Save WB Gains for plotting use ---
     st.session_state["white_balance_gains"] = white_balance_gains
 
     # --- Show WB Gains ---
     st.markdown(f"""
     **RGB White Balance Multipliers** (Green = 1.000):  
-     R: `{white_balance_gains['R']:.3f}`   G: `1.000`   B: `{white_balance_gains['B']:.3f}`
+    R: `{white_balance_gains['R']:.3f}`   G: `1.000`   B: `{white_balance_gains['B']:.3f}`
     """)
+
 else:
     st.info("ℹ️ Select filters.")
 
