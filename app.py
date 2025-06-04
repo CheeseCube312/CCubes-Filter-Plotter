@@ -5,19 +5,26 @@
 
 import glob
 import os
+import re
 from pathlib import Path
+from io import BytesIO
+
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-import streamlit as st
 from scipy.interpolate import interp1d
 from scipy.spatial import distance
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+import plotly.io as pio
+import plotly.graph_objects as go
+import streamlit as st
+from matplotlib.patches import Rectangle
+from collections import Counter
 
 # --- Configuration ---
 INTERP_GRID = np.arange(300, 1101, 5)  # Wavelength range: 300–1100nm, 5nm step
 st.set_page_config(page_title="CheeseCubes Filter Plotter", layout="wide")
 
-# --- Loaders ---
 
 #def LOAD filter data
 @st.cache_data
@@ -63,7 +70,6 @@ def load_filter_data():
     return combined, sorted(all_wls)
 
 
-
 df, wavelengths = load_filter_data()
 if df.empty:
     st.stop()
@@ -71,6 +77,7 @@ if df.empty:
 
 filter_display = df["Filter Name"] + " (" + df["Filter Number"] + ", " + df["Manufacturer"] + ")"
 display_to_index = {name: i for i, name in enumerate(filter_display)}
+
 
 #def LOAD QE data
 @st.cache_data
@@ -112,6 +119,7 @@ def load_qe_data():
 
     return sorted(qe_dict.keys()), qe_dict, default_key
 
+
 #def LOAD Illuminants
 @st.cache_data
 def load_illuminants():
@@ -142,8 +150,8 @@ def load_illuminants():
 
     return illuminants
 
-# --- Pre-Processing ---
 
+# --- Pre-Processing ---
 def interpolate_filter_curves(df: pd.DataFrame, wavelengths: list[int]) -> tuple[np.ndarray, np.ndarray]:
     """
     Interpolate transmission curves of filters to a uniform wavelength grid.
@@ -191,13 +199,14 @@ def get_combined_transmission(indices, filter_matrix, combine=True):
         return combined
     return filter_matrix[indices[0]]
 
+# Sanitize Export filename
+def sanitize_filename(name: str) -> str:
+    """
+    Replace any characters that are illegal in file/folder names.
+    """
+    return re.sub(r'[<>:"/\\|?*]', "-", name).strip()
 
 # Core computation
-
-    """
-    Compute per-channel weighted response from transmission, QE, and illuminant curves.
-    If `nan_safe` is True, fills NaNs with 0. Otherwise, skips them using masking.
-    """
 def compute_weighted_response(trans, illum, current_qe, nan_safe=True):
     responses = {}
     for ch, qe in current_qe.items():
@@ -221,36 +230,13 @@ def normalize_rgb_to_green(rgb: dict[str, float]) -> dict[str, float]:
         return {k: v / g for k, v in rgb.items()}
     return {"R": 0.0, "G": 1.0, "B": 0.0}
 
+# Sanitize output folder names
+def sanitize_folder_name(name: str) -> str:
+    # Replace any illegal filesystem chars with “-”
+    return re.sub(r'[<>:"/\\|?*]', "-", name).strip()
 
-
-# Estimate correlated color temperature (CCT) and tint from normalized white balance
-def compute_cct_and_tint(wb_gains):
-    vec_rgb = np.array([wb_gains.get("R", 0), 1.0, wb_gains.get("B", 0)])
-    M = np.array([[0.4124, 0.3576, 0.1805],
-                  [0.2126, 0.7152, 0.0722],
-                  [0.0193, 0.1192, 0.9505]])
-    XYZ = M @ vec_rgb
-    X, Y, Z = XYZ
-    S = X + Y + Z
-    if S == 0:
-        return None
-
-    x, y = X / S, Y / S
-    n = (x - 0.3320) / (y - 0.1858)
-    CCT = 449 * n**3 + 3525 * n**2 + 6823.3 * n + 5520.33
-
-    denom = X + 15 * Y + 3 * Z
-    if denom == 0:
-        return CCT, None, None, None
-
-    u, v = (4 * X) / denom, (6 * Y) / denom
-    duv = np.sqrt((u - 0.1978)**2 + (v - 0.4683)**2)
-    tone_units = duv / 0.0025
-    tone_direction = "Green" if v > 0.4683 else "Magenta"
-    return CCT, duv, tone_units, tone_direction
 
 # ----Inline Code starts here
-
 
 # --- Sidebar Filter Plotter ---
 st.sidebar.header("Filter Plotter")
@@ -298,7 +284,6 @@ selected_camera = st.sidebar.selectbox(
     "Sensor QE Profile", ["None"] + camera_keys, index=default_index
 )
 current_qe = qe_data.get(selected_camera) if selected_camera != "None" else None
-
 
 # Dynamic QE curve
 if current_qe:
@@ -525,6 +510,7 @@ if current_qe:
 
 
 
+
 if selected and current_qe and selected_illum is not None and trans is not None:
     # --- Compute Raw RGB Response (Illuminant × QE × Transmission) ---
     rgb_response = {}
@@ -556,12 +542,244 @@ if selected and current_qe and selected_illum is not None and trans is not None:
     # --- Show WB Gains ---
     st.markdown(f"""
     **RGB White Balance Multipliers** (Green = 1.000):  
-    R: `{white_balance_gains['R']:.3f}`   G: `1.000`   B: `{white_balance_gains['B']:.3f}`
+    R: {white_balance_gains['R']:.3f}   G: 1.000   B: {white_balance_gains['B']:.3f}
     """)
 
 else:
     st.info("ℹ️ Select filters.")
 
+
+
+## EXPORT
+if st.sidebar.button("📥 Download Report (PNG)"):
+    # 0) Guards
+    if not selected:
+        st.warning("⚠️ No filters selected—nothing to export.")
+    elif not current_qe:
+        st.warning("⚠️ No QE profile selected—cannot build sensor response plot.")
+    else:
+        # 1) Build combo name
+        combo_parts = []
+        for name in selected:
+            idx = display_to_index[name]
+            row = df.iloc[idx]
+            combo_parts.append(f"{row['Manufacturer']} {row['Filter Number']}")
+        combo_name = ", ".join(combo_parts)
+        safe_name = sanitize_filename(combo_name) or "report"
+
+        # 2) Ensure output folder
+        output_dir = Path("output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 3) Rebuild selected_indices exactly as UI does
+        selected_indices = []
+        for name in selected:
+            idx = display_to_index[name]
+            count = st.session_state.get(f"mult_{name}", 1)
+            selected_indices.extend([idx] * count)
+
+        # 4) Combined vs single
+        is_combined = show_combined and len(selected_indices) > 1
+        if is_combined:
+            trans = get_combined_transmission(selected_indices, filter_matrix, combine=True)
+            combined = np.clip(trans, 1e-6, 1.0)
+            trans = combined
+            label = "Combined"
+        else:
+            trans = filter_matrix[selected_indices[0]]
+            combined = None
+            label = df.iloc[selected_indices[0]]["Filter Name"]
+
+        # 5) Compute avg_trans & effective_stops
+        valid = ~np.isnan(trans)
+        if np.any(valid):
+            sensor_qe = np.nanmean(np.array([curve for curve in current_qe.values()]), axis=0)
+            avg_trans = np.average(np.clip(trans[valid], 1e-6, 1.0), weights=sensor_qe[valid])
+            effective_stops = -np.log2(avg_trans)
+        else:
+            avg_trans = np.nan
+            effective_stops = np.nan
+
+        # 6) Retrieve WB gains from session (default to 1.0 if missing)
+        wb = st.session_state.get("white_balance_gains", {"R": 1.0, "G": 1.0, "B": 1.0})
+
+        # ------------------------------------------------
+        # 7) Build Matplotlib figure with 5 rows, including spectrum strip
+        plt.style.use("seaborn-v0_8-whitegrid")
+        plt.rcParams.update({
+            "font.family": "DejaVu Sans",
+            "axes.facecolor": "white",
+            "axes.edgecolor": "#CCCCCC",
+            "axes.grid": True,
+            "grid.color": "#EEEEEE",
+            "grid.linestyle": "-",
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "xtick.color": "#444444",
+            "ytick.color": "#444444",
+            "text.color": "#333333",
+            "axes.labelcolor": "#333333",
+            "axes.titleweight": "bold",
+            "axes.titlesize": 14,
+            "axes.labelsize": 12,
+            "legend.frameon": False,
+            "legend.fontsize": 8,
+        })
+
+        fig = plt.figure(figsize=(8, 14), dpi=150, constrained_layout=True)
+        gs = GridSpec(5, 1, height_ratios=[1.2, 0.6, 3.2, 0.8, 3.2], figure=fig)
+
+        # Row 0: FILTER INFO LIST
+        ax0 = fig.add_subplot(gs[0])
+        ax0.axis("off")
+        ax0.text(0.01, 0.95, "Filters Used:", fontsize=12, fontweight="bold", va="top")
+
+        # Start the list a bit lower so it doesn’t overlap the heading
+        y = 0.75
+        idx_counts = Counter(selected_indices)
+        for idx, cnt in idx_counts.items():
+            row = df.iloc[idx]
+            brand = row["Manufacturer"]
+            fname = row.get("Filter Name", "")
+            fnum = row["Filter Number"]
+            hexc = row["Hex Color"]
+
+            # Draw color swatch
+            swatch = Rectangle((0.01, y - 0.05), 0.03, 0.1, transform=ax0.transAxes,
+                            facecolor=hexc, edgecolor="black", lw=0.5)
+            ax0.add_patch(swatch)
+
+            ax0.text(
+                0.05, y,
+                f"{brand} – {fname} (#{fnum})  {hexc}  × {cnt}",
+                fontsize=10, va="center"
+            )
+            y -= 0.15
+            if y < 0:
+                break
+
+        # Row 1: ESTIMATED LIGHT LOSS
+        ax1 = fig.add_subplot(gs[1])
+        ax1.axis("off")
+        ax1.text(0.01, 0.85, "Estimated Light Loss:", fontsize=12, fontweight="bold", va="top")
+        ax1.text(
+            0.01, 0.30,
+            f"{label} → {effective_stops:.2f} stops  (Avg: {avg_trans * 100:.1f}%)",
+            fontsize=12, va="center"
+        )
+
+        # Row 2: FILTER TRANSMISSION (%) Plot
+        ax2 = fig.add_subplot(gs[2])
+        for idx in selected_indices:
+            row = df.iloc[idx]
+            trans_curve = np.clip(filter_matrix[idx], 1e-6, 1.0) * 100
+            mask = extrapolated_masks[idx]
+            ax2.plot(
+                INTERP_GRID[~mask], trans_curve[~mask],
+                label=f"{row['Filter Name']} ({row['Filter Number']})",
+                linestyle='-', linewidth=1.75, color=row["Hex Color"]
+            )
+            if np.any(mask):
+                ax2.plot(
+                    INTERP_GRID[mask], trans_curve[mask],
+                    linestyle='--', linewidth=1.0, color=row["Hex Color"]
+                )
+
+        if is_combined and combined is not None:
+            combined_curve = combined * 100
+            ax2.plot(
+                INTERP_GRID, combined_curve,
+                label="Combined Filter", color="black", linewidth=2.5
+            )
+
+        ax2.set_title("Filter Transmission (%)")
+        ax2.set_xlabel("Wavelength (nm)")
+        ax2.set_ylabel("Transmission (%)")
+        ax2.set_xlim(INTERP_GRID.min(), INTERP_GRID.max())
+        ax2.set_ylim(0, 100)
+        ax2.legend(loc="upper right")
+
+        # Row 3: RGB WHITE-BALANCE MULTIPLIERS
+        ax3 = fig.add_subplot(gs[3])
+        ax3.axis("off")
+        ax3.text(0.01, 0.85, "RGB White Balance Multipliers:", fontsize=12, fontweight="bold", va="top")
+        ax3.text(0.01, 0.40, f"R: {wb['R']:.3f}   G: 1.000   B: {wb['B']:.3f}", fontsize=12, va="center")
+
+        # Row 4: SENSOR-WEIGHTED RESPONSE (QE × Transmission) + Spectrum Strip
+        ax4 = fig.add_subplot(gs[4])
+        max_response = 0.0
+
+        # Prepare arrays for RGB‐based spectrum (same length as INTERP_GRID)
+        r_resp = np.zeros_like(INTERP_GRID, dtype=float)
+        g_resp = np.zeros_like(INTERP_GRID, dtype=float)
+        b_resp = np.zeros_like(INTERP_GRID, dtype=float)
+
+        # 1) Plot each channel’s response and accumulate into r_resp, g_resp, b_resp
+        for channel, qe_curve in current_qe.items():
+            wb_gain = wb.get(channel, 1.0)
+            weighted = np.nan_to_num(trans * (qe_curve / 100)) * wb_gain
+            y_vals = weighted * 100
+            max_response = max(max_response, np.nanmax(y_vals, initial=0.0))
+
+            color_map = {"R": "red", "G": "green", "B": "blue"}
+            ax4.plot(
+                INTERP_GRID, y_vals,
+                label=f"{channel} Channel", linewidth=2, color=color_map.get(channel, "gray")
+            )
+
+            # Accumulate for spectrum‐strip creation:
+            if channel == "R":
+                r_resp = y_vals
+            elif channel == "G":
+                g_resp = y_vals
+            elif channel == "B":
+                b_resp = y_vals
+
+        # 2) Build normalized RGB matrix (N×3) for coloring the strip
+        rgb_matrix = np.stack([r_resp, g_resp, b_resp], axis=1)  # shape (N, 3)
+        if (mv := np.nanmax(rgb_matrix)) > 0:
+            rgb_matrix = rgb_matrix / mv
+        # Prevent any channel from going to pure zero (avoids black gaps)
+        rgb_matrix = np.clip(rgb_matrix, 1/255, 1.0)
+
+        # 3) Draw the spectrum strip just above the curves using imshow
+        #    We create a 2D array of shape (1, N, 3), then display it with extent.
+        strip_height = max_response * 0.05 if max_response > 0 else 1.0  # 5% of max_response
+        spectrum_bottom = max_response * 1.02
+        spectrum_top = spectrum_bottom + strip_height
+        ax4.imshow(
+            rgb_matrix[np.newaxis, :, :],              # shape (1, N, 3)
+            aspect='auto',
+            extent=[INTERP_GRID.min(), INTERP_GRID.max(), spectrum_bottom, spectrum_top]
+        )
+
+        # 4) Finalize ax4 axes limits and labels
+        ax4.set_title("Sensor-Weighted Response (QE × Transmission)")
+        ax4.set_xlabel("Wavelength (nm)")
+        ax4.set_ylabel("Response (%)")
+        ax4.set_xlim(INTERP_GRID.min(), INTERP_GRID.max())
+        ax4.set_ylim(0, spectrum_top * 1.02 if spectrum_top > 0 else 1.0)
+        ax4.legend(loc="upper right", bbox_to_anchor=(0.98, 0.85))
+
+
+        # Finalize layout
+        fig.tight_layout()
+
+        # 8) Save to disk and offer download
+        report_filename = f"{safe_name}.png"
+        report_path = output_dir / report_filename
+        fig.savefig(report_path, format="png", bbox_inches="tight")
+
+        with open(report_path, "rb") as f:
+            png_bytes = f.read()
+
+        st.success(f"✔️ Report saved to: output/{report_filename}")
+        st.download_button(
+            "📥 Download Report PNG",
+            data=png_bytes,
+            file_name=report_filename,
+            mime="image/png"
+        )
 
 # --- QE Plotting ---
 if current_qe:
