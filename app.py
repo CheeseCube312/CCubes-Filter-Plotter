@@ -548,9 +548,7 @@ if selected and current_qe and selected_illum is not None and trans is not None:
 else:
     st.info("ℹ️ Select filters.")
 
-
-
-## EXPORT
+# Export Button
 if st.sidebar.button("📥 Download Report (PNG)"):
     # 0) Guards
     if not selected:
@@ -646,7 +644,7 @@ if st.sidebar.button("📥 Download Report (PNG)"):
 
             # Draw color swatch
             swatch = Rectangle((0.01, y - 0.05), 0.03, 0.1, transform=ax0.transAxes,
-                            facecolor=hexc, edgecolor="black", lw=0.5)
+                               facecolor=hexc, edgecolor="black", lw=0.5)
             ax0.add_patch(swatch)
 
             ax0.text(
@@ -717,8 +715,15 @@ if st.sidebar.button("📥 Download Report (PNG)"):
         # 1) Plot each channel’s response and accumulate into r_resp, g_resp, b_resp
         for channel, qe_curve in current_qe.items():
             wb_gain = wb.get(channel, 1.0)
-            weighted = np.nan_to_num(trans * (qe_curve / 100)) * wb_gain
-            y_vals = weighted * 100
+            # Compute “raw” weighted signal (without WB):
+            weighted_raw = np.nan_to_num(trans * (qe_curve / 100))
+
+            # Now apply white balance by dividing (not multiplying):
+            if wb_gain > 0:
+                y_vals = (weighted_raw / wb_gain) * 100
+            else:
+                y_vals = weighted_raw * 100
+
             max_response = max(max_response, np.nanmax(y_vals, initial=0.0))
 
             color_map = {"R": "red", "G": "green", "B": "blue"}
@@ -727,7 +732,7 @@ if st.sidebar.button("📥 Download Report (PNG)"):
                 label=f"{channel} Channel", linewidth=2, color=color_map.get(channel, "gray")
             )
 
-            # Accumulate for spectrum‐strip creation:
+            # Accumulate for the spectrum strip:
             if channel == "R":
                 r_resp = y_vals
             elif channel == "G":
@@ -739,12 +744,10 @@ if st.sidebar.button("📥 Download Report (PNG)"):
         rgb_matrix = np.stack([r_resp, g_resp, b_resp], axis=1)  # shape (N, 3)
         if (mv := np.nanmax(rgb_matrix)) > 0:
             rgb_matrix = rgb_matrix / mv
-        # Prevent any channel from going to pure zero (avoids black gaps)
         rgb_matrix = np.clip(rgb_matrix, 1/255, 1.0)
 
-        # 3) Draw the spectrum strip just above the curves using imshow
-        #    We create a 2D array of shape (1, N, 3), then display it with extent.
-        strip_height = max_response * 0.05 if max_response > 0 else 1.0  # 5% of max_response
+        # 3) Draw spectrum strip just above the curves using imshow
+        strip_height = max_response * 0.05 if max_response > 0 else 1.0
         spectrum_bottom = max_response * 1.02
         spectrum_top = spectrum_bottom + strip_height
         ax4.imshow(
@@ -753,14 +756,13 @@ if st.sidebar.button("📥 Download Report (PNG)"):
             extent=[INTERP_GRID.min(), INTERP_GRID.max(), spectrum_bottom, spectrum_top]
         )
 
-        # 4) Finalize ax4 axes limits and labels
+        # 4) Finalize ax4 axes limits, labels, and move legend downward
         ax4.set_title("Sensor-Weighted Response (QE × Transmission)")
         ax4.set_xlabel("Wavelength (nm)")
         ax4.set_ylabel("Response (%)")
         ax4.set_xlim(INTERP_GRID.min(), INTERP_GRID.max())
         ax4.set_ylim(0, spectrum_top * 1.02 if spectrum_top > 0 else 1.0)
         ax4.legend(loc="upper right", bbox_to_anchor=(0.98, 0.85))
-
 
         # Finalize layout
         fig.tight_layout()
