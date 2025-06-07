@@ -1,0 +1,8 @@
+
+    Specify that the sensor response output graph is "white-balanced"
+    add un-whitebalanced graph
+    fix labeling on multipliers
+    fix ability to export with different QE
+    fix ability to export with different illuminant
+    remove hex-code label from export
+    minor adjustments here and there

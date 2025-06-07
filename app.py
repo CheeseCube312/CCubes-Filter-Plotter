@@ -20,6 +20,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from matplotlib.patches import Rectangle
 from collections import Counter
+import warnings
 
 # --- Configuration ---
 INTERP_GRID = np.arange(300, 1101, 5)  # Wavelength range: 300–1100nm, 5nm step
@@ -32,7 +33,7 @@ def load_filter_data():
     """
     Load all .tsv files from 'filters_data' and return combined DataFrame and wavelength list.
     """
-    folder = "filters_data"
+    folder = os.path.join("data", "filters_data")
     os.makedirs(folder, exist_ok=True)
     files = glob.glob(os.path.join(folder, "*.tsv"))
 
@@ -88,7 +89,7 @@ def load_qe_data():
     def normalize_channel(name):
         return {"red": "R", "green": "G", "blue": "B"}.get(name.strip().lower(), name.strip())
 
-    folder = "QE_data"
+    folder = os.path.join("data", "QE_data")
     os.makedirs(folder, exist_ok=True)
     files = glob.glob(os.path.join(folder, "*.tsv"))
 
@@ -124,9 +125,9 @@ def load_qe_data():
 @st.cache_data
 def load_illuminants():
     """
-    Load spectral power distribution data for light sources from 'Illuminants'.
+    Load spectral power distribution data for light sources from 'illuminants'.
     """
-    folder = "Illuminants"
+    folder = os.path.join("data", "illuminants")
     os.makedirs(folder, exist_ok=True)
 
     illuminants = {}
@@ -199,12 +200,12 @@ def get_combined_transmission(indices, filter_matrix, combine=True):
         return combined
     return filter_matrix[indices[0]]
 
-# Sanitize Export filename
-def sanitize_filename(name: str) -> str:
-    """
-    Replace any characters that are illegal in file/folder names.
-    """
-    return re.sub(r'[<>:"/\\|?*]', "-", name).strip()
+#sanitize file stuff
+def sanitize_path_part(name: str, lowercase=False, max_len=None) -> str:
+    clean = re.sub(r'[<>:"/\\|?*]', "-", name).strip()
+    if lowercase:
+        clean = clean.lower()
+    return clean
 
 # Core computation
 def compute_weighted_response(trans, illum, current_qe, nan_safe=True):
@@ -230,10 +231,11 @@ def normalize_rgb_to_green(rgb: dict[str, float]) -> dict[str, float]:
         return {k: v / g for k, v in rgb.items()}
     return {"R": 0.0, "G": 1.0, "B": 0.0}
 
-# Sanitize output folder names
-def sanitize_folder_name(name: str) -> str:
-    # Replace any illegal filesystem chars with “-”
-    return re.sub(r'[<>:"/\\|?*]', "-", name).strip()
+#filter sort key for export
+def filter_sort_key(idx):
+    fnum = df.iloc[idx]["Filter Number"]
+    m = re.search(r'(\d+)', fnum)
+    return int(m.group(1)) if m else fnum
 
 
 # ----Inline Code starts here
@@ -528,9 +530,9 @@ if selected and current_qe and selected_illum is not None and trans is not None:
     g = rgb_response.get("G", 1.0)
     if g > 1e-6:
         white_balance_gains = {
-            "R": rgb_response.get("R", 0) / g,
+            "R": g / rgb_response.get("R", np.nan),
             "G": 1.0,
-            "B": rgb_response.get("B", 0) / g,
+            "B": g / rgb_response.get("B", np.nan),
         }
     else:
         white_balance_gains = {"R": 1.0, "G": 1.0, "B": 1.0}
@@ -544,9 +546,9 @@ if selected and current_qe and selected_illum is not None and trans is not None:
     **RGB White Balance Multipliers** (Green = 1.000):  
     R: {white_balance_gains['R']:.3f}   G: 1.000   B: {white_balance_gains['B']:.3f}
     """)
-
 else:
     st.info("ℹ️ Select filters.")
+
 
 # Export Button
 if st.sidebar.button("📥 Download Report (PNG)"):
@@ -556,17 +558,29 @@ if st.sidebar.button("📥 Download Report (PNG)"):
     elif not current_qe:
         st.warning("⚠️ No QE profile selected—cannot build sensor response plot.")
     else:
-        # 1) Build combo name
-        combo_parts = []
+        # 1) Build sorted, grouped combo name
+        combo_rows = []
         for name in selected:
             idx = display_to_index[name]
             row = df.iloc[idx]
-            combo_parts.append(f"{row['Manufacturer']} {row['Filter Number']}")
+            combo_rows.append((row["Manufacturer"], int(row["Filter Number"]), row))
+
+        # Sort by manufacturer, then filter number
+        combo_rows.sort(key=lambda x: (x[0], x[1]))
+
+        # Build combo name string: "ABC 123, ABC 456, XYZ 789"
+        combo_parts = [f"{row['Manufacturer']} {row['Filter Number']}" for _, _, row in combo_rows]
         combo_name = ", ".join(combo_parts)
-        safe_name = sanitize_filename(combo_name) or "report"
+
 
         # 2) Ensure output folder
-        output_dir = Path("output")
+        base_output = Path("exports")  # Use 'exports' instead of 'output'
+        qe_safe = sanitize_path_part(selected_camera or "Unknown_QE")
+        illum_safe = sanitize_path_part(selected_illum_name or "Unknown_Illuminant")
+        filters_safe = sanitize_path_part(combo_name[:60])
+
+        # Folder path matches your desired structure
+        output_dir = base_output / f"QE_{qe_safe}" / f"Illuminant_{illum_safe}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 3) Rebuild selected_indices exactly as UI does
@@ -649,12 +663,13 @@ if st.sidebar.button("📥 Download Report (PNG)"):
 
             ax0.text(
                 0.05, y,
-                f"{brand} – {fname} (#{fnum})  {hexc}  × {cnt}",
+                f"{brand} – {fname} (#{fnum})  × {cnt}",
                 fontsize=10, va="center"
             )
             y -= 0.15
             if y < 0:
                 break
+
 
         # Row 1: ESTIMATED LIGHT LOSS
         ax1 = fig.add_subplot(gs[1])
@@ -757,31 +772,55 @@ if st.sidebar.button("📥 Download Report (PNG)"):
         )
 
         # 4) Finalize ax4 axes limits, labels, and move legend downward
-        ax4.set_title("Sensor-Weighted Response (QE × Transmission)")
+        # Centered bold main title
+        ax4.set_title(
+            "Sensor-Weighted Response (White-Balanced)",
+            fontsize=14, fontweight="bold", loc="center", pad=10
+        )
+
+        # Centered, smaller, non-bold subtitle just below title
+        qe_label = f"Quantum Efficiency data: {selected_camera or 'None'}"
+        illum_label = f"Illuminant: {selected_illum_name or 'None'}"
+        subtitle = f"{qe_label}   |   {illum_label}"
+
+        ax4.text(
+            0.5, 0.99, subtitle,
+            transform=ax4.transAxes,
+            fontsize=8, fontweight="normal",
+            ha="center", va="bottom"
+        )
         ax4.set_xlabel("Wavelength (nm)")
         ax4.set_ylabel("Response (%)")
         ax4.set_xlim(INTERP_GRID.min(), INTERP_GRID.max())
         ax4.set_ylim(0, spectrum_top * 1.02 if spectrum_top > 0 else 1.0)
         ax4.legend(loc="upper right", bbox_to_anchor=(0.98, 0.85))
+        
 
         # Finalize layout
         fig.tight_layout()
-
         # 8) Save to disk and offer download
-        report_filename = f"{safe_name}.png"
+        filters_safe = sanitize_path_part(", ".join(combo_parts), max_len=60)
+        output_dir = Path("output") / f"QE {qe_safe}" / f"Illuminant {illum_safe}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_filename = f"{filters_safe}.png"
         report_path = output_dir / report_filename
-        fig.savefig(report_path, format="png", bbox_inches="tight")
 
+        # Save figure
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            fig.savefig(report_path, format="png", bbox_inches="tight")
         with open(report_path, "rb") as f:
             png_bytes = f.read()
 
-        st.success(f"✔️ Report saved to: output/{report_filename}")
+        # Show success and download button
+        st.success(f"✔️ Report saved to: {report_path}")
         st.download_button(
             "📥 Download Report PNG",
             data=png_bytes,
             file_name=report_filename,
             mime="image/png"
         )
+
 
 # --- QE Plotting ---
 if current_qe:
