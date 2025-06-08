@@ -511,8 +511,6 @@ if current_qe:
     st.plotly_chart(fig_response, use_container_width=True)
 
 
-
-
 if selected and current_qe and selected_illum is not None and trans is not None:
     # --- Compute Raw RGB Response (Illuminant × QE × Transmission) ---
     rgb_response = {}
@@ -563,7 +561,7 @@ if st.sidebar.button("📥 Download Report (PNG)"):
         for name in selected:
             idx = display_to_index[name]
             row = df.iloc[idx]
-            combo_rows.append((row["Manufacturer"], int(row["Filter Number"]), row))
+            combo_rows.append((row["Manufacturer"], row["Filter Number"], row))
 
         # Sort by manufacturer, then filter number
         combo_rows.sort(key=lambda x: (x[0], x[1]))
@@ -571,17 +569,6 @@ if st.sidebar.button("📥 Download Report (PNG)"):
         # Build combo name string: "ABC 123, ABC 456, XYZ 789"
         combo_parts = [f"{row['Manufacturer']} {row['Filter Number']}" for _, _, row in combo_rows]
         combo_name = ", ".join(combo_parts)
-
-
-        # 2) Ensure output folder
-        base_output = Path("exports")  # Use 'exports' instead of 'output'
-        qe_safe = sanitize_path_part(selected_camera or "Unknown_QE")
-        illum_safe = sanitize_path_part(selected_illum_name or "Unknown_Illuminant")
-        filters_safe = sanitize_path_part(combo_name[:60])
-
-        # Folder path matches your desired structure
-        output_dir = base_output / f"QE_{qe_safe}" / f"Illuminant_{illum_safe}"
-        output_dir.mkdir(parents=True, exist_ok=True)
 
         # 3) Rebuild selected_indices exactly as UI does
         selected_indices = []
@@ -615,7 +602,6 @@ if st.sidebar.button("📥 Download Report (PNG)"):
         # 6) Retrieve WB gains from session (default to 1.0 if missing)
         wb = st.session_state.get("white_balance_gains", {"R": 1.0, "G": 1.0, "B": 1.0})
 
-        # ------------------------------------------------
         # 7) Build Matplotlib figure with 5 rows, including spectrum strip
         plt.style.use("seaborn-v0_8-whitegrid")
         plt.rcParams.update({
@@ -798,10 +784,16 @@ if st.sidebar.button("📥 Download Report (PNG)"):
 
         # Finalize layout
         fig.tight_layout()
-        # 8) Save to disk and offer download
+
+        # Unified output directory setup (was Step 2 + Step 8)
+        base_output = Path("output")  # Consistent top-level folder
+        qe_safe = sanitize_path_part(selected_camera or "Unknown_QE")
+        illum_safe = sanitize_path_part(selected_illum_name or "Unknown_Illuminant")
         filters_safe = sanitize_path_part(", ".join(combo_parts), max_len=60)
-        output_dir = Path("output") / f"QE {qe_safe}" / f"Illuminant {illum_safe}"
+
+        output_dir = base_output / f"QE_{qe_safe}" / f"Illuminant_{illum_safe}"
         output_dir.mkdir(parents=True, exist_ok=True)
+
         report_filename = f"{filters_safe}.png"
         report_path = output_dir / report_filename
 
@@ -814,13 +806,6 @@ if st.sidebar.button("📥 Download Report (PNG)"):
 
         # Show success and download button
         st.success(f"✔️ Report saved to: {report_path}")
-        st.download_button(
-            "📥 Download Report PNG",
-            data=png_bytes,
-            file_name=report_filename,
-            mime="image/png"
-        )
-
 
 # --- QE Plotting ---
 if current_qe:
