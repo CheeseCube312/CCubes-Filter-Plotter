@@ -543,7 +543,7 @@ if current_qe:
         qe_curve = current_qe[channel]
         gain = white_balance_gains.get(channel, 1.0)
         weighted = np.nan_to_num(trans * (qe_curve / 100))
-        y_values = (weighted / gain) * 100 if apply_white_balance and gain > 0 else weighted * 100
+        y_values = (weighted * gain) * 100 if apply_white_balance and gain > 0 else weighted * 100
 
         # Update peak value
         max_response_value = max(max_response_value, np.max(y_values))
@@ -768,11 +768,13 @@ if st.sidebar.button("📥 Download Report (PNG)"):
             wb_gain = wb.get(channel, 1.0)
             weighted_raw = np.nan_to_num(trans * (qe_curve / 100))
 
-            # Now apply white balance by dividing (not multiplying):
+            # Apply white balance by multiplying with gain
             if wb_gain > 0:
-                y_vals = (weighted_raw / wb_gain) * 100
+                y_vals = weighted_raw * wb_gain * 100
             else:
                 y_vals = weighted_raw * 100
+
+
 
             max_response = max(max_response, np.nanmax(y_vals, initial=0.0))
             color_map = {"R": "red", "G": "green", "B": "blue"}
