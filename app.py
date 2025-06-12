@@ -767,7 +767,6 @@ if st.sidebar.button("📥 Download Report (PNG)"):
         for channel, qe_curve in current_qe.items():
             wb_gain = wb.get(channel, 1.0)
             weighted_raw = np.nan_to_num(trans * (qe_curve / 100))
-<<<<<<< Updated upstream
 
             # Now apply white balance by dividing (not multiplying):
             if wb_gain > 0:
@@ -775,9 +774,6 @@ if st.sidebar.button("📥 Download Report (PNG)"):
             else:
                 y_vals = weighted_raw * 100
 
-=======
-            y_vals = weighted_raw * wb_gain * 100 if wb_gain > 0 else weighted_raw * 100
->>>>>>> Stashed changes
             max_response = max(max_response, np.nanmax(y_vals, initial=0.0))
             color_map = {"R": "red", "G": "green", "B": "blue"}
             ax4.plot(INTERP_GRID, y_vals, label=f"{channel} Channel", linewidth=2, color=color_map.get(channel, "gray"))
