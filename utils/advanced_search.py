@@ -185,7 +185,7 @@ def advanced_filter_search(df: pd.DataFrame, filter_matrix: np.ndarray):
                         font-size: 1rem;
                         margin-bottom: 0;
                     ">
-                        #{number} — {name} — {brand} — <code>{hex_color}</code>
+                        {number} — {name} — {brand} 
                     </div>
                 """, unsafe_allow_html=True)
 
