@@ -23,8 +23,11 @@ from matplotlib.patches import Rectangle
 from collections import Counter
 import warnings
 
+from utils import advanced_search
+
+
 # --- Configuration ---
-INTERP_GRID = np.arange(300, 1101, 5)  # Wavelength range: 300–1100nm, 5nm step
+from utils.constants import INTERP_GRID
 st.set_page_config(page_title="CheeseCubes Filter Plotter", layout="wide")
 
 # Loader Block
@@ -152,8 +155,6 @@ def load_illuminants():
     return illuminants
 
 ##  Filter & Transmission Processing Block
-
-
 def get_selected_indices(selected, multipliers, display_to_index, session_state):
     """Build the final list of selected filter indices with multiplier counts."""
     selected_indices = []
@@ -352,11 +353,22 @@ def sanitize_path_part(name: str, lowercase=False, max_len=None) -> str:
 
 
 # ----Inline Code starts here
-# --- Sidebar Filter Plotter ---
+# --- Sidebar: Filter Selection ---
 st.sidebar.header("Filter Plotter")
+
+# Multiselect filters to plot
 selected = st.sidebar.multiselect("Select filters to plot", options=filter_display)
 
-# --- Sidebar Filter Multipliers ---
+# Initialize the advanced‑search flag if first run
+if "advanced" not in st.session_state:
+    st.session_state.advanced = False
+
+# Toggle advanced search
+if st.sidebar.button("Advanced Search"):
+    st.session_state.advanced = True
+
+
+# --- Sidebar: Filter Multipliers ---
 filter_multipliers = {}
 if selected:
     with st.sidebar.expander("📦 Set Filter Stack Counts"):
@@ -369,54 +381,60 @@ if selected:
                 step=1,
                 key=f"mult_{name}"
             )
-# Display in stop view + refresh filters
-log_stops = st.sidebar.checkbox("Display in stop-view", value=False)
-
-if st.sidebar.button("🔄 Refresh Filters"):
-    st.cache_data.clear()
-    st.rerun()
 
 
-# Load illuminants
-illuminants = load_illuminants()
-illum_names = list(illuminants.keys())
-if illum_names:
-    default_index = illum_names.index("D65") if "D65" in illum_names else 0
-    selected_illum_name = st.sidebar.selectbox("Scene Illuminant", illum_names, index=default_index)
-    selected_illum = illuminants[selected_illum_name]
-else:
-    st.sidebar.error("⚠️ No illuminants found. Please add .tsv files to the 'Illuminants/' folder.")
-    selected_illum_name = None
-    selected_illum = None
+# --- Sidebar: Extras Section ---
+with st.sidebar.expander("Extras", expanded=False):
+    # Refresh filters
+    if st.button("🔄 Refresh Filters"):
+        st.cache_data.clear()
+        st.rerun()
 
-# --- Sensor QE Profile Selection ---
-camera_keys, qe_data, default_key = load_qe_data()
-default_index = camera_keys.index(default_key) + 1 if default_key in camera_keys else 0
+    # Scene Illuminant
+    illuminants = load_illuminants()
+    illum_names = list(illuminants.keys())
 
-selected_camera = st.sidebar.selectbox(
-    "Sensor QE Profile", ["None"] + camera_keys, index=default_index
-)
-current_qe = qe_data.get(selected_camera) if selected_camera != "None" else None
+    if illum_names:
+        default_illum_idx = illum_names.index("D65") if "D65" in illum_names else 0
+        selected_illum_name = st.selectbox("Scene Illuminant", illum_names, index=default_illum_idx)
+        selected_illum = illuminants[selected_illum_name]
+    else:
+        st.error("⚠️ No illuminants found. Please add .tsv files to the 'Illuminants/' folder.")
+        selected_illum_name = None
+        selected_illum = None
 
-# Dynamic QE curve
+    # Sensor QE Profile
+    camera_keys, qe_data, default_key = load_qe_data()
+    default_qe_idx = camera_keys.index(default_key) + 1 if default_key in camera_keys else 0
+
+    selected_camera = st.selectbox(
+        "Sensor QE Profile", ["None"] + camera_keys, index=default_qe_idx
+    )
+    current_qe = qe_data.get(selected_camera) if selected_camera != "None" else None
+
+    # Stop-view toggle
+    log_stops = st.checkbox("Display in Stop View", value=False)
+
+
+# --- Sensor QE Curve Calculation ---
 if current_qe:
-    # Average all selected QE curves
     qe_curves = np.array([curve for _, curve in current_qe.items()])
     sensor_qe = np.nanmean(qe_curves, axis=0)
 else:
-    # This should rarely happen — maybe warn?
     st.warning("No QE curves selected. Using flat QE response.")
     sensor_qe = np.ones_like(INTERP_GRID)
 
-# App title
-st.markdown(
-    """
-    <div style='display: flex; justify-content: space-between; align-items: center;'>
-        <h4 style='margin: 0;'>🧀 CheeseCubes Filter Designer</h4>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+
+# --- Title ---
+st.markdown("""
+<div style='display: flex; justify-content: space-between; align-items: center;'>
+    <h4 style='margin: 0;'>🧀 CheeseCubes Filter Designer</h4>
+</div>
+""", unsafe_allow_html=True)
+
+
+# --- Advanced Search ---
+advanced_search.advanced_filter_search(df, filter_matrix)
 
 #--- Filters and Plotting ---
 if selected:
@@ -529,7 +547,6 @@ if current_qe:
     wb = st.session_state.get("white_balance_gains", {"R": 1.0, "G": 1.0, "B": 1.0})
 
     r_resp, g_resp, b_resp, rgb_matrix, max_response = compute_sensor_weighted_rgb_response(trans, current_qe, wb)
-
 
 
     # Track peak response value
