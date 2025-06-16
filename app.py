@@ -357,7 +357,13 @@ def sanitize_path_part(name: str, lowercase=False, max_len=None) -> str:
 st.sidebar.header("Filter Plotter")
 
 # Multiselect filters to plot
-selected = st.sidebar.multiselect("Select filters to plot", options=filter_display)
+selected = st.sidebar.multiselect(
+    "Select filters to plot",
+    options=filter_display,
+    default=st.session_state.get("selected_filters", [])
+)
+st.session_state["selected_filters"] = selected
+
 
 # Initialize the advanced‑search flag if first run
 if "advanced" not in st.session_state:
@@ -434,7 +440,14 @@ st.markdown("""
 
 
 # --- Advanced Search ---
-advanced_search.advanced_filter_search(df, filter_matrix)
+adv_result = advanced_search.advanced_filter_search(df, filter_matrix)
+if adv_result:
+    # Merge results into selected filters and remove duplicates
+    st.session_state.selected_filters = list(set(st.session_state.get("selected_filters", []) + adv_result))
+
+# Pull current selected filters from session
+selected = st.session_state.get("selected_filters", [])
+
 
 #--- Filters and Plotting ---
 if selected:
