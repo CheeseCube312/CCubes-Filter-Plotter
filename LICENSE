@@ -26,7 +26,10 @@ ________________________________________________________
 
 DATA:
 
-This program makes use of factual spectral data (e.g., filter transmission, illuminant spectra) that was digitized from publicly available graphs and tables published by manufacturers, research institutions, and standards bodies. I would like to thank the following organizations and individuals for their contributions to open knowledge and transparency in the respective fields:
+This program makes use of factual spectral data (e.g., filter transmission, illuminant spectra) that 
+was digitized from publicly available graphs and tables published by manufacturers, research institutions, 
+and standards bodies. I would like to thank the following organizations and individuals for their 
+contributions to open knowledge and transparency in the respective fields:
 
 Illuminants: 
 - NREL (National Renewable Energy Laboratory) 
@@ -39,12 +42,14 @@ Filters:
 - Midwest Optical Systems Inc.  aka. "MidOpt"
 - Shijiazhuang Tang Snow Photoelectric Technology Co., Ltd. aka "Tangsinuo" 
 
-I also want to thank everyone who has contributed to this project, including those who have provided feedback, provided data or requested features. Thank you for your support!
+I also want to thank everyone who has contributed to this project, including those who have provided feedback, 
+provided data or requested features. Thank you for your support!
 
 
 Legal:
 
-- Under most legal systems, raw scientific or technical data is not subject to copyright, and as such, these values are not bound by license restrictions. 
+- Under most legal systems, raw scientific or technical data is not subject to copyright, and as such, 
+these values are not bound by license restrictions. 
 - Inclusion in the list does not mean to imply endorsement by any organization or individual.
 - The datasets have been reformatted to work with this software and do not represent official manufacturer documentation. 
 - I do not guarantee that the attribution list is complete, accurate, or up-to-date.
