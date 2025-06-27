@@ -265,19 +265,21 @@ def compute_filter_transmission(selected_indices, filter_matrix, df):
 
 #Computes average transmission weighted by sensor QE and effective light loss in stops.
 def compute_effective_stops(trans, sensor_qe):
-    valid = ~np.isnan(trans)
+    valid = ~np.isnan(trans) & ~np.isnan(sensor_qe)
     if not np.any(valid):
         return np.nan, np.nan
 
-    # Clip trans to prevent log2 issues
     clipped_trans = np.clip(trans[valid], 1e-6, 1.0)
     clipped_qe = sensor_qe[valid]
 
-    # Compute weighted average
+    if np.all(clipped_qe == 0):
+        return np.nan, np.nan  # No effective weighting possible
+
     avg_trans = np.average(clipped_trans, weights=clipped_qe)
     effective_stops = -np.log2(avg_trans)
 
     return avg_trans, effective_stops
+
 
 def compute_white_balance_gains(
     trans_interp: np.ndarray,
@@ -789,20 +791,43 @@ if current_qe:
     sensor_qe = np.nanmean(qe_curves, axis=0)
 else:
     sensor_qe = np.ones_like(INTERP_GRID)
+    
+illum_curve = st.session_state.get("illum_curve_data")
 
-# --- Generate Report ---
+# — Report Generation —
 if st.sidebar.button("📄 Generate Report (PNG)"):
-    generate_report_png(
-        selected, current_qe, filter_matrix, df, display_to_index,
-        compute_selected_filter_indices, compute_filter_transmission, compute_effective_stops,
-        extrapolated_masks, add_filter_curve_to_matplotlib,
-        INTERP_GRID, sensor_qe,
-        selected_camera, selected_illum_name,
-        sanitize_filename_component
+    # Compute selected indices once here
+    selected_indices = compute_selected_filter_indices(
+        selected, "mult_", display_to_index, st.session_state
     )
+    if not selected_indices:
+        st.warning("No filters selected – cannot generate report.")
+    else:
+        generate_report_png(
+            selected_filters=selected,
+            current_qe=current_qe,
+            filter_matrix=filter_matrix,
+            df=df,
+            display_to_index=display_to_index,
+            compute_selected_indices_fn=lambda sel: selected_indices,
+            compute_filter_transmission_fn=lambda idxs: compute_filter_transmission(
+                idxs, filter_matrix, df
+            ),
+            compute_effective_stops_fn=compute_effective_stops,
+            compute_white_balance_gains_fn=compute_white_balance_gains,
+            masks=extrapolated_masks,
+            add_curve_fn=add_filter_curve_to_matplotlib,
+            interp_grid=INTERP_GRID,
+            sensor_qe=sensor_qe,
+            camera_name=selected_camera or "UnknownCamera",
+            illuminant_name=selected_illum_name or "UnknownIlluminant",
+            sanitize_fn=sanitize_filename_component,
+            illuminant_curve=illum_curve if illum_curve is not None else np.ones_like(INTERP_GRID),
+        )
 
-last_export = st.session_state.get("last_export")
-if last_export and "bytes" in last_export:
+# Show download button if a report is ready
+last_export = st.session_state.get("last_export", {})
+if last_export.get("bytes"):
     st.sidebar.download_button(
         label="⬇️ Download Last Report",
         data=last_export["bytes"],
@@ -936,16 +961,6 @@ if current_qe and selected_illum is not None:
 else:
     wb_gains = {'R': 1.0, 'G': 1.0, 'B': 1.0}
 
-# Store white balance gains for reuse (e.g. in sensor‐response plotting)
-st.session_state["white_balance_gains"] = wb_gains
-
-st.markdown(
-    "**RGB White Balance Multipliers** (Green = 1.000):  \n"
-    f"R: `{wb_gains['R']:.3f}`   "
-    f"G: `{wb_gains['G']:.3f}`   "
-    f"B: `{wb_gains['B']:.3f}`"
-)
-
 # — Compute & Display RGB White Balance —
 if selected and current_qe and selected_illum is not None:
     wb_gains = compute_white_balance_gains(
@@ -957,7 +972,7 @@ if selected and current_qe and selected_illum is not None:
     st.session_state["white_balance_gains"] = wb_gains
 
     st.markdown(
-        f"**RGB White Balance Multipliers** (Green = 1.000):  \n"
+        f"**RGB Pre-White-Balance | relative channel intensity:** (Green = 1.000):  \n"
         f"R: {wb_gains['R']:.3f}   "
         f"G: {wb_gains['G']:.3f}   "
         f"B: {wb_gains['B']:.3f}"

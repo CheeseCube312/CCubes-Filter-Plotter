@@ -1,5 +1,5 @@
 .venv/
 .vscode/
-utils/__pycache__/
+__pycache__/
 .gitignore
 output

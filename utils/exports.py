@@ -1,51 +1,16 @@
+import io
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Rectangle
-import numpy as np
-from collections import Counter
-from pathlib import Path
-import warnings
 import streamlit as st
 
-def generate_report_png(
-    selected, current_qe, filter_matrix, df, display_to_index,
-    get_selected_indices, compute_transmission, compute_average_stops,
-    normalize_rgb_to_green, extrapolated_masks, add_filter_trace_matplotlib,
-    INTERP_GRID, sensor_qe, selected_camera, selected_illum_name,
-    sanitize_path_part
-):
-    # Guards
-    if not selected:
-        st.warning("⚠️ No filters selected—nothing to export.")
-        return None
-    elif not current_qe:
-        st.warning("⚠️ No QE profile selected—cannot build sensor response plot.")
-        return None
 
-    # Build sorted, grouped combo name
-    combo_rows = []
-    for name in selected:
-        idx = display_to_index[name]
-        row = df.iloc[idx]
-        combo_rows.append((row["Manufacturer"], row["Filter Number"], row))
-    combo_rows.sort(key=lambda x: (x[0], x[1]))
-    combo_name = ", ".join(f"{row['Manufacturer']} {row['Filter Number']}" for _, _, row in combo_rows)
-
-    # Build selected_indices via helper
-    selected_indices = get_selected_indices(selected, "mult_", display_to_index, st.session_state)
-
-    # Compute transmission & label via helper
-    trans, label, combined = compute_transmission(selected_indices, filter_matrix, df)
-
-    # Compute avg_trans & effective stops via helper
-    avg_trans, effective_stops = compute_average_stops(trans, sensor_qe)
-
-    # Get normalized white balance gains
-    raw_wb = st.session_state.get("white_balance_gains", {"R": 1.0, "G": 1.0, "B": 1.0})
-    wb = normalize_rgb_to_green(raw_wb)
-
-    # Setup matplotlib styling & figure
-    plt.style.use("seaborn-v0_8-whitegrid")
+def setup_matplotlib_style():
+    try:
+        plt.style.use("seaborn-v0_8-whitegrid")
+    except OSError:
+        plt.style.use("seaborn-whitegrid")
     plt.rcParams.update({
         "font.family": "DejaVu Sans",
         "axes.facecolor": "white",
@@ -66,145 +31,166 @@ def generate_report_png(
         "legend.fontsize": 8,
     })
 
-    fig = plt.figure(figsize=(8, 14), dpi=150, constrained_layout=True)
-    gs = GridSpec(5, 1, height_ratios=[1.2, 0.6, 3.2, 0.8, 3.2], figure=fig)
 
-    # FILTER INFO LIST
-    ax0 = fig.add_subplot(gs[0])
-    ax0.axis("off")
-    ax0.text(0.01, 0.95, "Filters Used:", fontsize=12, fontweight="bold", va="top")
-    y = 0.75
-    idx_counts = Counter(selected_indices)
-    for idx, cnt in idx_counts.items():
+def generate_report_png(
+    selected_filters: list[str],
+    current_qe: dict[str, np.ndarray],
+    filter_matrix: np.ndarray,
+    df,
+    display_to_index: dict[str, int],
+    compute_selected_indices_fn,
+    compute_filter_transmission_fn,
+    compute_effective_stops_fn,
+    compute_white_balance_gains_fn,
+    masks: np.ndarray,
+    add_curve_fn,
+    interp_grid: np.ndarray,
+    sensor_qe: np.ndarray,
+    camera_name: str,
+    illuminant_name: str,
+    sanitize_fn,
+    illuminant_curve: np.ndarray
+):
+    # Guard
+    if not selected_filters:
+        st.warning("⚠️ No filters selected—nothing to export.")
+        return
+
+    # Sort combo name
+    combo = []
+    for name in sorted(selected_filters):
+        idx = display_to_index.get(name)
         row = df.iloc[idx]
-        brand = row["Manufacturer"]
-        fname = row.get("Filter Name", "")
-        fnum = row["Filter Number"]
-        hexc = row["Hex Color"]
-        swatch = Rectangle((0.01, y - 0.05), 0.03, 0.1, transform=ax0.transAxes,
-                           facecolor=hexc, edgecolor="black", lw=0.5)
-        ax0.add_patch(swatch)
-        ax0.text(0.05, y, f"{brand} – {fname} (#{fnum})  × {cnt}", fontsize=10, va="center")
-        y -= 0.15
-        if y < 0:
-            break
+        combo.append((row['Manufacturer'], row['Filter Number'], row))
+    combo_name = ", ".join(f"{m} {n}" for m, n, _ in combo)
 
-    # ESTIMATED LIGHT LOSS
+    # Resolve indices
+    selected_indices = compute_selected_indices_fn(selected_filters)
+    if not selected_indices:
+        st.warning("⚠️ Invalid filter selection—cannot resolve indices.")
+        return
+
+    # Compute curves
+    trans, label, combined = compute_filter_transmission_fn(selected_indices)
+    active_trans = combined if combined is not None else trans
+    avg_trans, stops = compute_effective_stops_fn(active_trans, sensor_qe)
+    wb = compute_white_balance_gains_fn(active_trans, current_qe, illuminant_curve)
+
+    # Style & figure
+    setup_matplotlib_style()
+    fig = plt.figure(figsize=(8, 14), dpi=150, constrained_layout=False)
+    gs = GridSpec(5, 1, figure=fig, height_ratios=[1.2, 0.6, 3.2, 0.8, 3.2])
+
+    # 1: Filter swatches
+    ax0 = fig.add_subplot(gs[0])
+    ax0.axis('off')
+    y0 = 0.9
+    counts = {f: selected_filters.count(f) for f in set(selected_filters)}
+    for name, cnt in counts.items():
+        idx = display_to_index[name]
+        row = df.iloc[idx]
+        hexc = row.get('Hex Color', '#000000')
+        rect = Rectangle((0.0, y0-0.15), 0.03, 0.1, transform=ax0.transAxes,
+                         facecolor=hexc, edgecolor='black', lw=0.5)
+        ax0.add_patch(rect)
+        ax0.text(0.03, y0-0.1, f"{row['Manufacturer']} – {row['Filter Name']} (#{row['Filter Number']}) ×{cnt}",
+                 transform=ax0.transAxes, fontsize=10, va='center')
+        y0 -= 0.15
+
+    # 2: Light loss
     ax1 = fig.add_subplot(gs[1])
-    ax1.axis("off")
-    ax1.text(0.01, 0.85, "Estimated Light Loss:", fontsize=12, fontweight="bold", va="top")
-    ax1.text(0.01, 0.30, f"{label} → {effective_stops:.2f} stops  (Avg: {avg_trans * 100:.1f}%)",
-             fontsize=12, va="center")
+    ax1.axis('off')
+    ax1.text(0.01, 0.7, 'Estimated Light Loss:', fontsize=12, fontweight='bold')
+    ax1.text(0.01, 0.3, f"{label} → {stops:.2f} stops (Avg: {avg_trans*100:.1f}%)", fontsize=12)
 
-    # FILTER TRANSMISSION Plot
+    # 3: Transmission plot
     ax2 = fig.add_subplot(gs[2])
     for idx in selected_indices:
         row = df.iloc[idx]
-        trans_curve = np.clip(filter_matrix[idx], 1e-6, 1.0) * 100
-        mask = extrapolated_masks[idx]
-        add_filter_trace_matplotlib(
-            ax2, INTERP_GRID, trans_curve, mask,
-            f"{row['Filter Name']} ({row['Filter Number']})",
-            row["Hex Color"]
-        )
-
+        y = np.clip(filter_matrix[idx], 1e-6, 1.0) * 100
+        mask = masks[idx]
+        add_curve_fn(ax2, interp_grid, y, mask,
+                     f"{row['Filter Name']} ({row['Filter Number']})", row.get('Hex Color', '#000000'))
     if len(selected_indices) > 1:
-        combined_curve = trans * 100
-        ax2.plot(INTERP_GRID, combined_curve, label="Combined Filter", color="black", linewidth=2.5)
-
-    ax2.set_title("Filter Transmission (%)")
-    ax2.set_xlabel("Wavelength (nm)")
-    ax2.set_ylabel("Transmission (%)")
-    ax2.set_xlim(INTERP_GRID.min(), INTERP_GRID.max())
+        ax2.plot(interp_grid, active_trans * 100, color='black', lw=2.5, label='Combined Filter')
+    ax2.set_title('Filter Transmission (%)')
+    ax2.set_xlabel('Wavelength (nm)')
+    ax2.set_ylabel('Transmission (%)')
+    ax2.set_xlim(interp_grid.min(), interp_grid.max())
     ax2.set_ylim(0, 100)
-    ax2.legend(loc="upper right")
 
-    # RGB WHITE-BALANCE MULTIPLIERS
+    # 4: WB multipliers
     ax3 = fig.add_subplot(gs[3])
-    ax3.axis("off")
-    ax3.text(0.01, 0.85, "RGB White Balance Multipliers:", fontsize=12, fontweight="bold", va="top")
-    ax3.text(0.01, 0.40, f"R: {wb['R']:.3f}   G: 1.000   B: {wb['B']:.3f}", fontsize=12, va="center")
+    ax3.axis('off')
+    ax3.text(0.01, 0.6, 'RGB Pre-White-Balance | relative channel intensity:', fontsize=12, fontweight='bold')
+    ax3.text(0.01, 0.4, f"R: {wb['R']:.3f}   G: 1.000   B: {wb['B']:.3f}", fontsize=12)
 
-    # SENSOR-WEIGHTED RESPONSE + Spectrum Strip
+    # 5: Sensor-weighted response
     ax4 = fig.add_subplot(gs[4])
-    max_response = 0.0
+    maxresp = 0
+    stack = {}
+    color_map = {'R': 'red', 'G': 'green', 'B': 'blue'}
+    # Plot in correct RGB order
+    for ch in ['R', 'G', 'B']:
+        qe = current_qe.get(ch)
+        if qe is None:
+            continue
+        gains = wb.get(ch, 1.0)
+        resp = np.nan_to_num(active_trans * (qe / 100)) * 100 / gains
+        ax4.plot(
+            interp_grid,
+            resp,
+            label=f"{ch} Channel",
+            lw=2,
+            color=color_map[ch]
+        )
+        maxresp = max(maxresp, np.nanmax(resp))
+        stack[ch] = resp
 
-    r_resp = np.zeros_like(INTERP_GRID, dtype=float)
-    g_resp = np.zeros_like(INTERP_GRID, dtype=float)
-    b_resp = np.zeros_like(INTERP_GRID, dtype=float)
-
-    for channel, qe_curve in current_qe.items():
-        wb_gain = wb.get(channel, 1.0)
-        weighted_raw = np.nan_to_num(trans * (qe_curve / 100))
-
-        if wb_gain > 0:
-            y_vals = weighted_raw * wb_gain * 100
-        else:
-            y_vals = weighted_raw * 100
-
-        max_response = max(max_response, np.nanmax(y_vals, initial=0.0))
-        color_map = {"R": "red", "G": "green", "B": "blue"}
-        ax4.plot(INTERP_GRID, y_vals, label=f"{channel} Channel", linewidth=2, color=color_map.get(channel, "gray"))
-        if channel == "R":
-            r_resp = y_vals
-        elif channel == "G":
-            g_resp = y_vals
-        elif channel == "B":
-            b_resp = y_vals
-
-    rgb_matrix = np.stack([r_resp, g_resp, b_resp], axis=1)
+    # Spectrum strip
+    rgb_matrix = np.stack([
+        stack.get('R', np.zeros_like(active_trans)),
+        stack.get('G', np.zeros_like(active_trans)),
+        stack.get('B', np.zeros_like(active_trans))
+    ], axis=1)
     mv = np.nanmax(rgb_matrix)
     if mv > 0:
         rgb_matrix /= mv
-    rgb_matrix = np.clip(rgb_matrix, 1/255, 1.0)
+    extent = [interp_grid.min(), interp_grid.max(), maxresp * 1.02, maxresp * 1.07]
+    ax4.imshow(rgb_matrix[np.newaxis, :, :], aspect='auto', extent=extent)
 
-    strip_height = max_response * 0.05 if max_response > 0 else 1.0
-    spectrum_bottom = max_response * 1.02
-    spectrum_top = spectrum_bottom + strip_height
-    ax4.imshow(rgb_matrix[np.newaxis, :, :], aspect='auto',
-               extent=[INTERP_GRID.min(), INTERP_GRID.max(), spectrum_bottom, spectrum_top])
+    ax4.set_title('Sensor-Weighted Response (White-Balanced)', fontsize=14, fontweight='bold')
+    subtitle = f"Quantum Efficiency: {camera_name or 'None'}   |   Illuminant: {illuminant_name or 'None'}"
+    ax4.text(0.5, 0.98,subtitle,transform=ax4.transAxes,ha='center',va='bottom',fontsize=8)
+    ax4.set_xlabel('Wavelength (nm)')
+    ax4.set_ylabel('Response (%)')
+    ax4.set_xlim(interp_grid.min(), interp_grid.max())
+    ax4.set_ylim(0, extent[3] * 1.02)
+    ax4.legend(loc='upper right',fontsize=8,bbox_to_anchor=(1.0, 0.95)
+)
 
-    ax4.set_title("Sensor-Weighted Response (White-Balanced)", fontsize=14, fontweight="bold", loc="center", pad=10)
 
-    qe_label = f"Quantum Efficiency data: {selected_camera or 'None'}"
-    illum_label = f"Illuminant: {selected_illum_name or 'None'}"
-    subtitle = f"{qe_label}   |   {illum_label}"
-    ax4.text(0.5, 0.99, subtitle, transform=ax4.transAxes, fontsize=8,
-             fontweight="normal", ha="center", va="bottom")
+    # Finalize
+    fig.suptitle(f"Filter Report", fontsize=16, fontweight='bold')
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
 
-    ax4.set_xlabel("Wavelength (nm)")
-    ax4.set_ylabel("Response (%)")
-    ax4.set_xlim(INTERP_GRID.min(), INTERP_GRID.max())
-    ax4.set_ylim(0, spectrum_top * 1.02 if spectrum_top > 0 else 1.0)
-    ax4.legend(loc="upper right", bbox_to_anchor=(0.98, 0.85))
+    # Save to buffer
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
 
-    fig.tight_layout()
+    # Filename
+    fname = sanitize_fn(f"{camera_name}_{illuminant_name}_{combo_name}") + '.png'
 
-    # Unified output directory setup
-    base_output = Path("output")
-    qe_safe = sanitize_path_part(selected_camera or "Unknown_QE")
-    illum_safe = sanitize_path_part(selected_illum_name or "Unknown_Illuminant")
-    filters_safe = sanitize_path_part(combo_name, max_len=60)
+    # NEW: Save to /outputs/[QE]/[Illuminant] folder
+    import os
+    output_dir = os.path.join("output", sanitize_fn(camera_name), sanitize_fn(illuminant_name))
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, fname)
+    with open(output_path, "wb") as f:
+        f.write(buf.getvalue())
 
-    output_dir = base_output / f"QE_{qe_safe}" / f"Illuminant_{illum_safe}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    report_filename = f"{filters_safe}.png"
-    report_path = output_dir / report_filename
-
-    # Save figure, suppress warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        fig.savefig(report_path, format="png", bbox_inches="tight")
-
-    with open(report_path, "rb") as f:
-        png_bytes = f.read()
-
-    st.success(f"✔️ Report saved to: {report_path}")
-    st.session_state["last_export"] = {
-        "path": report_path,
-        "name": report_filename,
-        "bytes": png_bytes
-    }
-
-    return report_path
+    # Session state for download button
+    st.session_state['last_export'] = {'bytes': buf.getvalue(), 'name': fname}
+    st.success(f"✔️ Report generated: {fname}")
