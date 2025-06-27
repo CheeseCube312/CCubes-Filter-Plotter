@@ -126,7 +126,9 @@ def advanced_filter_search(df: pd.DataFrame, filter_matrix: np.ndarray):
         sort_choice = cols[3].selectbox("Sort by", [
             "Filter Number", "Filter Name", "Hex‑Rainbow", f"Trans @ {wl} nm"
         ])
-        apply_clicked = cols[4].form_submit_button("🔄 Apply")
+        with cols[4]:
+            st.markdown("<div style='margin-top: 28px'></div>", unsafe_allow_html=True)
+            apply_clicked = st.form_submit_button("🔄 Apply")
 
     if apply_clicked:
         st.session_state.update({
