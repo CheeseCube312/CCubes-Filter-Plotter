@@ -37,10 +37,6 @@ I've included a large collection of filters. Most was added by scraping the LeeF
 
 Some was added manually by running transmission graphs through WebPlotDigitizer. 
 
+Legal: See LICENSE.md
 
-Legal:
-Wether or not transmission data is subject to copyright is unclear to me. From what I can gather it's a statement of fact about a product and thus can not be copyrighted. If a manufacturer wants to argue I'll just remove their data from the included dataset since I can't be arsed to fight this. 
-This program is for non-commercial use and made available for free to give IR photographers a decent tool for DIY filter experiments.
-
-
-Have fun :) 
+Feedback is greatly appreciated. Contact info in Bio. 
