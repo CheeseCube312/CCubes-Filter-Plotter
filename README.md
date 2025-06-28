@@ -1,5 +1,3 @@
-I created this plotting tool for IR photography by yelling at AI for a few weeks.
-
 Features:
 - plot transmission data for camera filters
 - show combined transmission curve
@@ -8,7 +6,6 @@ Features:
 - show sensor response curve at given illuminant
 - show illuminant and QE graphs independently
 - export everything as .png file for easy sharing
-
 
 _______________________________________________________________
 
@@ -39,3 +36,5 @@ The program is designed to use a folder full of individual .tsv files for each f
 I've included a large collection of filters. Some was added manually by running transmission graphs through WebPlotDigitizer. Legal info in LICENSE.md
 
 Have fun :) 
+
+Disclaimer: Large parts of this project have been created with AI assistance
