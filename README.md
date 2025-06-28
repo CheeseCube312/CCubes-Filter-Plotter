@@ -16,12 +16,12 @@ Installation:
 
 1) Install Python 3.8 or higher. Make sure to Install to PATH (should be selectible in install wizard) https://www.python.org/
 
-2) Run Install.bat
+2) On windows: Run Install.bat / On Linux: Run Install.sh
 
-Install.bat will download install all the necessary python libraries (found in Requirements.txt)
+Install script will download install all the necessary python libraries (found in Requirements.txt)
+After first install you can start it with start.bat/start.sh. It simply starts the program with a virtual environment (venv).
 
-After first install you can start with start.bat. It just starts the program with a virtual environment (venv)
-
+You can just delete the install/run scripts that don't apply to your operating system. 
 ______________________________________________________________
 
 Adding/Removing data:
