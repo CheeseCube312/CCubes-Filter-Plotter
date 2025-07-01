@@ -1,3 +1,5 @@
+I created this plotting tool for IR photography by yelling at AI for a few weeks.
+
 Features:
 - plot transmission data for camera filters
 - show combined transmission curve
@@ -7,18 +9,19 @@ Features:
 - show illuminant and QE graphs independently
 - export everything as .png file for easy sharing
 
+
 _______________________________________________________________
 
 Installation:
 
 1) Install Python 3.8 or higher. Make sure to Install to PATH (should be selectible in install wizard) https://www.python.org/
 
-2) On windows: Run Install.bat / On Linux: Run Install.sh
+2) Run Install.bat
 
-Install script will download install all the necessary python libraries (found in Requirements.txt)
-After first install you can start it with start.bat/start.sh. It simply starts the program with a virtual environment (venv).
+Install.bat will download install all the necessary python libraries (found in Requirements.txt)
 
-You can just delete the install/run scripts that don't apply to your operating system. 
+After first install you can start with start.bat. It just starts the program with a virtual environment (venv)
+
 ______________________________________________________________
 
 Adding/Removing data:
@@ -36,5 +39,3 @@ The program is designed to use a folder full of individual .tsv files for each f
 I've included a large collection of filters. Some was added manually by running transmission graphs through WebPlotDigitizer. Legal info in LICENSE.md
 
 Have fun :) 
-
-Disclaimer: Large parts of this project have been created with AI assistance
