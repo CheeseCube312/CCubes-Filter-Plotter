@@ -75,7 +75,7 @@ def process_qe_csv(csv_path: Path, brand: str, model: str, out_dir: Path) -> Pat
 
 def import_qe_from_csv(uploaded_file, brand, model):
     try:
-        out_dir = Path("data/quantum_efficiency")
+        out_dir = Path("data/QE_data")
         out_dir.mkdir(parents=True, exist_ok=True)
 
         tmp_path = out_dir / "tmp_upload.csv"
