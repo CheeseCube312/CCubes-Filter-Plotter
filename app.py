@@ -63,6 +63,10 @@ from utils.ui_components import (
 
 from utils.file_utils import sanitize_filename_component
 
+#WebPlotDigitizer data converters
+from utils.importers import import_data
+
+
 # --- Configuration ---
 from utils.constants import INTERP_GRID
 st.set_page_config(page_title="CheeseCubes Filter Plotter", layout="wide")
@@ -172,7 +176,6 @@ if last_export.get("bytes"):
         mime="image/png",
         use_container_width=True
     )
-
 # --- Settings: Toggles + Refresh ---
 with st.sidebar.expander("Settings", expanded=False):
 
@@ -185,10 +188,20 @@ with st.sidebar.expander("Settings", expanded=False):
     for channel in ["R", "G", "B"]:
         rgb_channels[channel] = st.checkbox(f"{channel} Channel", value=True, key=f"show_{channel}")
 
-   # --- Rebuild Cache ---
+    # --- Rebuild Cache ---
     if st.button("🔄 Rebuild Filter Cache"):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()
+
+    # --- Import Data Button ---
+    if st.button("WebPlotDigitizer .csv importers"):
+        st.session_state.show_import_data = True
+
+    if st.session_state.get("show_import_data", False):
+        from utils.importers.frontend_interface_importer import import_data
+        st.markdown("---")
+        import_data()
+
 
 
 selected_indices = compute_selected_filter_indices(selected, "mult_", display_to_index, st.session_state) if selected else []

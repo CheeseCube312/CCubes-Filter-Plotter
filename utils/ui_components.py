@@ -25,10 +25,14 @@ filter_display = [
 
 display_to_index = {name: idx for idx, name in enumerate(filter_display)}
 
-
-#BLOCK: Sidebar UI Components
 def ui_sidebar_filter_selection():
+    # --- Apply pending selections BEFORE the widget is created ---
+    if "_pending_selected_filters" in st.session_state:
+        pending = st.session_state.pop("_pending_selected_filters")
+        current = st.session_state.get("selected_filters", [])
+        st.session_state["selected_filters"] = list(set(current + pending))
 
+    # --- Widget logic ---
     current_selection = st.session_state.get("selected_filters", [])
     all_options = sorted(set(filter_display) | set(current_selection))
 
@@ -39,19 +43,16 @@ def ui_sidebar_filter_selection():
         key="selected_filters",
     )
 
-    # Advanced search toggle as checkbox
+    # --- Advanced search toggle ---
     advanced = st.sidebar.checkbox("Show Advanced Search", value=st.session_state.get("advanced", False))
     st.session_state.advanced = advanced
 
+    # Let the advanced search handle its internal reruns and result passing
     if advanced:
-        adv_result = advanced_search.advanced_filter_search(df, filter_matrix)
-        if adv_result:
-            new_selection = list(set(selected + adv_result))
-            if set(new_selection) != set(selected):
-                st.session_state["selected_filters"] = new_selection
-                st.experimental_rerun()
+        _ = advanced_search.advanced_filter_search(df, filter_matrix)
 
     return selected
+
 
 def ui_sidebar_filter_multipliers(selected):
     filter_multipliers = {}

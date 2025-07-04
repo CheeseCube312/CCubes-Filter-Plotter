@@ -215,10 +215,13 @@ def advanced_filter_search(df: pd.DataFrame, filter_matrix: np.ndarray):
                 for idx in selected_idxs
             ]
 
-            current = st.session_state.get("selected_filters", [])
-            st.session_state["selected_filters"] = list(set(current + selected_display))
+            st.session_state["_pending_selected_filters"] = selected_display
             st.session_state.advanced = False
             st.rerun()
+
+    for idx in df_sorted.index:
+        st.session_state.pop(f"adv_sel_{idx}", None)
+        st.session_state.pop(f"filter_toggle_{idx}", None)
 
     with col_cancel:
         if st.button("✖ Cancel"):
