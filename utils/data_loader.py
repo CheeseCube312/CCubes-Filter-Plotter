@@ -2,12 +2,14 @@ import os
 import glob
 import numpy as np
 import pandas as pd
-import json
 from pathlib import Path
-
 import streamlit as st
-from .constants import INTERP_GRID  
+import pickle
+import hashlib
+from .constants import INTERP_GRID
 
+CACHE_DIR = Path("cache")
+CACHE_DIR.mkdir(exist_ok=True)
 
 def _is_float(value):
     try:
@@ -16,13 +18,44 @@ def _is_float(value):
     except (TypeError, ValueError):
         return False
 
-#BLOCK: Loaders + Interpolation
-@st.cache_data
+def _save_cache(obj, filename):
+    with open(CACHE_DIR / filename, "wb") as f:
+        pickle.dump(obj, f)
+
+def _load_cache(filename):
+    path = CACHE_DIR / filename
+    if path.exists():
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    return None
+
+def _get_data_files_hash(folder: str, pattern: str = "**/*.*") -> str:
+    """
+    Generate a hash string based on file names and modification times in the folder.
+    """
+    file_info = []
+    folder_path = Path(folder)
+    for filepath in sorted(folder_path.glob(pattern)):
+        if filepath.is_file():
+            stat = filepath.stat()
+            file_info.append(f"{filepath.name}-{stat.st_mtime}")
+    file_info_str = "|".join(file_info)
+    return hashlib.md5(file_info_str.encode()).hexdigest()
+
+# --- FILTER DATA ---
 def load_filter_data():
     folder = os.path.join("data", "filters_data")
     os.makedirs(folder, exist_ok=True)
-    files = glob.glob(os.path.join(folder, "**", "*.tsv"), recursive=True)
 
+    version_hash = _get_data_files_hash(folder, pattern="**/*.tsv")
+    cached = _load_cache("filter_data.pkl")
+    cached_version = _load_cache("filter_data_version.pkl")
+
+    if cached is not None and cached_version == version_hash:
+        return cached
+
+    # Rebuild cache
+    files = glob.glob(os.path.join(folder, "**", "*.tsv"), recursive=True)
     meta_list, matrix, masks = [], [], []
 
     for path in files:
@@ -30,7 +63,6 @@ def load_filter_data():
             df = pd.read_csv(path, sep="\t")
             df.columns = [str(c).strip() for c in df.columns]
 
-            # Detect wavelength columns
             wl_cols = sorted([float(c) for c in df.columns if _is_float(c)])
             str_wl_cols = [str(int(w)) for w in wl_cols]
             if not wl_cols or 'Filter Number' not in df.columns:
@@ -38,9 +70,12 @@ def load_filter_data():
 
             for _, row in df.iterrows():
                 fn = str(row['Filter Number'])
-                name = row.get('Filter Name', fn)
+
+                name_raw = row.get('Filter Name')
+                name = str(name_raw).strip() if pd.notnull(name_raw) and str(name_raw).strip() else "Unnamed"
                 manufacturer = row.get('Manufacturer', 'Unknown')
-                hex_color = row.get('Hex Color', '#1f77b4')
+                hex_color_raw = row.get('Hex Color')
+                hex_color = str(hex_color_raw).strip() if pd.notnull(hex_color_raw) and str(hex_color_raw).strip().startswith("#") else "#838383"
                 is_lee = 'LeeFilters' in os.path.basename(path)
 
                 raw = np.array([row.get(w, np.nan) for w in str_wl_cols], dtype=float)
@@ -64,17 +99,28 @@ def load_filter_data():
             st.warning(f"⚠️ Failed to load filter file '{os.path.basename(path)}': {e}")
 
     if not matrix:
-        return pd.DataFrame(), np.empty((0, len(INTERP_GRID))), np.empty((0, len(INTERP_GRID)), dtype=bool)
+        result = (pd.DataFrame(), np.empty((0, len(INTERP_GRID))), np.empty((0, len(INTERP_GRID)), dtype=bool))
+    else:
+        result = (pd.DataFrame(meta_list), np.vstack(matrix), np.vstack(masks))
 
-    return pd.DataFrame(meta_list), np.vstack(matrix), np.vstack(masks)
+    _save_cache(result, "filter_data.pkl")
+    _save_cache(version_hash, "filter_data_version.pkl")
+    return result
 
 
-@st.cache_data
+# --- QE DATA ---
 def load_qe_data():
     folder = os.path.join('data', 'QE_data')
     os.makedirs(folder, exist_ok=True)
-    files = glob.glob(os.path.join(folder, '*.tsv'))
 
+    version_hash = _get_data_files_hash(folder, pattern="*.tsv")
+    cached = _load_cache("qe_data.pkl")
+    cached_version = _load_cache("qe_data_version.pkl")
+
+    if cached is not None and cached_version == version_hash:
+        return cached
+
+    files = glob.glob(os.path.join(folder, '*.tsv'))
     qe_dict = {}
     default_key = None
 
@@ -103,13 +149,23 @@ def load_qe_data():
         except Exception as e:
             st.warning(f"⚠️ Failed to load QE file '{os.path.basename(path)}': {e}")
 
-    return sorted(qe_dict.keys()), qe_dict, default_key
+    result = (sorted(qe_dict.keys()), qe_dict, default_key)
+    _save_cache(result, "qe_data.pkl")
+    _save_cache(version_hash, "qe_data_version.pkl")
+    return result
 
 
-@st.cache_data
+# --- ILLUMINANTS ---
 def load_illuminants():
     folder = os.path.join('data', 'illuminants')
     os.makedirs(folder, exist_ok=True)
+
+    version_hash = _get_data_files_hash(folder, pattern="*.tsv")
+    cached = _load_cache("illuminants.pkl")
+    cached_version = _load_cache("illuminants_version.pkl")
+
+    if cached is not None and cached_version == version_hash:
+        return cached
 
     illum, meta = {}, {}
 
@@ -132,5 +188,7 @@ def load_illuminants():
         except Exception as e:
             st.warning(f"⚠️ Failed to load illuminant '{os.path.basename(path)}': {e}")
 
-    return illum, meta
-
+    result = (illum, meta)
+    _save_cache(result, "illuminants.pkl")
+    _save_cache(version_hash, "illuminants_version.pkl")
+    return result

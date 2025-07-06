@@ -70,7 +70,7 @@ from utils.importers import import_data
 # --- Configuration ---
 from utils.constants import INTERP_GRID
 st.set_page_config(page_title="CheeseCubes Filter Plotter", layout="wide")
-
+CACHE_DIR = Path("cache")
 
 def compute_selected_filter_indices(selected, multipliers, display_to_index, session_state):
     """Build the final list of selected filter indices with multiplier counts."""
@@ -176,9 +176,8 @@ if last_export.get("bytes"):
         mime="image/png",
         use_container_width=True
     )
-# --- Settings: Toggles + Refresh ---
-with st.sidebar.expander("Settings", expanded=False):
 
+with st.sidebar.expander("Settings", expanded=False):
     # Log view toggle
     log_stops = st.checkbox("Display Filters in Stop View", value=False)
 
@@ -190,8 +189,21 @@ with st.sidebar.expander("Settings", expanded=False):
 
     # --- Rebuild Cache ---
     if st.button("🔄 Rebuild Filter Cache"):
-        st.cache_data.clear()
-        st.rerun()
+        # Clear disk cache files
+        if CACHE_DIR.exists():
+            for f in CACHE_DIR.glob("*"):
+                try:
+                    f.unlink()
+                except Exception as e:
+                    st.warning(f"Failed to delete cache file {f}: {e}")
+
+        # Clear Streamlit cached functions
+        load_filter_data.clear()
+        load_qe_data.clear()
+        load_illuminants.clear()
+
+        # Rerun the app so caches are rebuilt
+        st.experimental_rerun()
 
     # --- Import Data Button ---
     if st.button("WebPlotDigitizer .csv importers"):
@@ -201,7 +213,6 @@ with st.sidebar.expander("Settings", expanded=False):
         from utils.importers.frontend_interface_importer import import_data
         st.markdown("---")
         import_data()
-
 
 
 selected_indices = compute_selected_filter_indices(selected, "mult_", display_to_index, st.session_state) if selected else []
