@@ -9,6 +9,10 @@ Features:
 - show illuminant and QE graphs independently
 - export everything as .png file for easy sharing
 
+IMPORTANT:
+You need to grab filter, QE and illuminant data so the program has something to work with. That can be downloaded from here: https://github.com/CheeseCube312/Filter-Plotter-Data
+
+It is no longer directly included in the release to ensure that you can update the software without overwriting your own, manually imported filter library if you want to avoid that. 
 
 _______________________________________________________________
 
