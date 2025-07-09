@@ -84,10 +84,7 @@ from matplotlib.patches import Rectangle
 from collections import Counter
 import warnings
 
-<<<<<<< Updated upstream
-=======
 #import /utils/advanced_search.py 
->>>>>>> Stashed changes
 from utils import advanced_search
 
 #import /utils/generate_report_png
