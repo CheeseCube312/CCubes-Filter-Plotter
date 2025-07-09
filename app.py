@@ -1,7 +1,68 @@
 #CheeseCubes Filter Plotter
-#Fairly simple filter plotter
 #I don't know how to code so this was made with lots of AI help
 #ChatGPT, then VS Code + Ollama + Continue.dev
+
+
+"""
+app.py
+
+Main orchestrator — ties together data loading, processing, visualization,
+and user interface into a cohesive Streamlit application for interactive filter analysis.
+
+--- Major Imports & Responsibilities ---
+- glob, os, pathlib, io, warnings, re, collections.Counter  
+    Filesystem and utility operations  
+- numpy, pandas, scipy.interpolate, scipy.spatial.distance  
+    Numerical processing, interpolation, and metrics  
+- matplotlib (pyplot, GridSpec, Rectangle), plotly (io, graph_objects)  
+    Static (PNG) and interactive (Plotly) plotting  
+- streamlit  
+    UI framework, session state, file uploads, download buttons  
+- utils.advanced_search  
+    Advanced filter search UI and logic  
+- utils.exports.generate_report_png  
+    Full-report PNG generator with swatches, plots, and metadata  
+- utils.data_loader (load_filter_data, load_qe_data, load_illuminants)  
+    TSV data ingestion, interpolation, and caching  
+- utils.filter_math (compute_active_transmission, compute_combined_transmission, compute_filter_transmission, compute_rgb_response_from_transmission_and_qe)  
+    Core filter‐to‐sensor light‐transmission math  
+- utils.metrics (compute_effective_stops, compute_white_balance_gains, calculate_transmission_deviation_metrics)  
+    Exposure loss, white balance gains, error metrics vs. target  
+- utils.plotting.plotly_utils (create_filter_response_plot, create_sensor_response_plot, add_filter_curve_to_plotly)  
+    Interactive Plotly figures for transmission and sensor response  
+- utils.plotting.mpl_utils.add_filter_curve_to_matplotlib  
+    Matplotlib helper for static curve plotting  
+- utils.ui_components (ui_sidebar_filter_selection, ui_sidebar_filter_multipliers, ui_sidebar_extras, display_raw_qe_and_illuminant)  
+    Reusable Streamlit sidebar and expander components  
+- utils.file_utils.sanitize_filename_component  
+    Safe filename generation  
+- utils.importers.import_data  
+    Frontend for CSV import of filters, illuminants, and QE data  
+- utils.constants.INTERP_GRID  
+    Shared wavelength grid (300–1100 nm, 1 nm steps)
+
+--- Core Helpers Defined Here ---
+- compute_selected_filter_indices(selected, multipliers, display_to_index, session_state):
+    Builds the final list of filter indices honoring per-filter multipliers.
+- convert_rgb_to_hex_color(row):
+    Converts a normalized RGB vector to a hex color string for spectrum rendering.
+
+--- Streamlit Layout ---
+1. **Sidebar**  
+   - Filter selection (multiselect + stack counts)  
+   - Extras: illuminant, QE profile, reference target  
+   - Report generation & download  
+   - Settings: log‐stop view, channel toggles, cache rebuild, data import UI  
+
+2. **Main Panel**  
+   - Application title and status  
+   - Light‐loss summary and deviation metrics  
+   - Interactive Plotly plots: filter transmission & sensor response  
+   - Static white‐balance gains display  
+   - Optional raw QE and illuminant curves expander  
+
+"""
+
 
 import glob
 import os
@@ -23,7 +84,13 @@ from matplotlib.patches import Rectangle
 from collections import Counter
 import warnings
 
+<<<<<<< Updated upstream
+=======
+#import /utils/advanced_search.py 
+>>>>>>> Stashed changes
 from utils import advanced_search
+
+#import /utils/generate_report_png
 from utils.exports import generate_report_png
 
 # --- Configuration ---

@@ -1,3 +1,16 @@
+"""
+exports.py
+
+Provides visualization and export functionality for filter transmission workflows,
+including sensor-weighted spectral plots and filter metadata.
+
+Functions:
+- setup_matplotlib_style: Applies consistent styling to matplotlib plots for clean report visuals.
+- generate_report_png: Generates a PNG report showing transmission, losses, white balance, and spectral response,
+  and writes it to an organized output directory for download or recordkeeping.
+"""
+
+
 import io
 import numpy as np
 import matplotlib.pyplot as plt

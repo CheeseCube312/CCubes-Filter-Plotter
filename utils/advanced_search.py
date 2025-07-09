@@ -1,3 +1,43 @@
+"""
+advanced_search.py
+
+Provides interactive UI and backend logic for advanced searching and sorting of optical filters 
+based on manufacturer, color, and transmittance at a specific wavelength.
+
+--- Imports ---
+- numpy, pandas: Core numerical and tabular operations.
+- colorsys: Converts hex to HSL for rainbow-like sorting.
+- re: Regex validation of hex colors.
+- streamlit: UI rendering and session state management.
+- plotly.graph_objects: For inline spectral plots.
+- utils.constants.INTERP_GRID: Interpolated wavelength grid for transmittance comparison.
+
+--- Key Functional Areas ---
+
+1. Filtering & Sorting Utilities
+    - filter_by_manufacturer: Filters dataframe by selected manufacturers.
+    - filter_by_trans_at_wavelength: Filters based on spectral transmittance at a wavelength.
+    - sort_by_hex_rainbow: Sorts filters by HSL hue from their hex colors.
+    - sort_by_trans_at_wavelength: Sorts by transmittance value at specific wavelength.
+
+2. Color Utilities
+    - is_dark_color: Calcualtes luminance so text can be adjusted for dark/light backgrounds.
+    - is_valid_hex_color: Validates that hex code is valid
+    - color_swatch: HTML preview of a filter's color
+
+3. Sparkline Generation
+    - generate_sparkline_plotly: Compact Plotly-based transmission curve preview.
+
+4. Advanced Search UI
+    - advanced_filter_search(df, matrix): Renders full UI for advanced filtering,
+      handles user input, sorting, previewing, and updating selected filters in Streamlit session state.
+
+--- Streamlit Integration ---
+- Uses session_state to persist filter selections, wavelengths, manufacturers, and rerun logic.
+- Selected filters from the UI are passed back into the session as `_pending_selected_filters` for plotting.
+"""
+
+
 import numpy as np
 import pandas as pd
 import colorsys
