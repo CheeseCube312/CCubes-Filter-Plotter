@@ -323,23 +323,30 @@ else:
     wb_gains = {'R': 1.0, 'G': 1.0, 'B': 1.0}
 
 # — Compute & Display RGB White Balance —
+# — Compute & Display RGB White Balance —
 if selected and current_qe and selected_illum is not None:
     wb_gains = compute_white_balance_gains(
         trans_interp=trans_interp,
         current_qe=current_qe,
         illum_curve=selected_illum
     )
-    # store for reuse (e.g. in sensor‐response plotting)
     st.session_state["white_balance_gains"] = wb_gains
 
+    # Calculate relative channel intensities (inverted gains)
+    intensities = {
+        k: (1.0 / v if v != 0 else 0.0)
+        for k, v in wb_gains.items()
+    }
+
     st.markdown(
-        f"**RGB Pre-White-Balance | relative channel intensity:** (Green = 1.000):  \n"
-        f"R: {wb_gains['R']:.3f}   "
-        f"G: {wb_gains['G']:.3f}   "
-        f"B: {wb_gains['B']:.3f}"
+        f"**White Balance Gains:** (Green = 1.000):  \n"
+        f"R: {intensities['R']:.3f}   "
+        f"G: {intensities['G']:.3f}   "
+        f"B: {intensities['B']:.3f}"
     )
 else:
     st.info("ℹ️ Select filters and a QE & illuminant profile to compute white balance.")
+
 
 
 # — Optional Viewer: Raw QE and Illuminant Curves —

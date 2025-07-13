@@ -119,11 +119,19 @@ def generate_report_png(
     ax2.set_xlim(interp_grid.min(), interp_grid.max())
     ax2.set_ylim(0, 100)
 
-    # 4: WB multipliers
+    # 4: WB multipliers (convert gains to intensities)
     ax3 = fig.add_subplot(gs[3])
     ax3.axis('off')
-    ax3.text(0.01, 0.6, 'RGB Pre-White-Balance | relative channel intensity:', fontsize=12, fontweight='bold')
-    ax3.text(0.01, 0.4, f"R: {wb['R']:.3f}   G: 1.000   B: {wb['B']:.3f}", fontsize=12)
+    ax3.text(0.01, 0.6, 'White Balance Gains (Green = 1):', fontsize=12, fontweight='bold')
+
+    # Convert gains back to raw intensities (relative to green)
+    intensities = {
+        'R': 1.0 / wb['R'] if wb['R'] != 0 else 0.0,
+        'G': 1.0,
+        'B': 1.0 / wb['B'] if wb['B'] != 0 else 0.0
+    }
+
+    ax3.text(0.01, 0.4, f"R: {intensities['R']:.3f}   G: {intensities['G']:.3f}   B: {intensities['B']:.3f}", fontsize=12)
 
     # 5: Sensor-weighted response
     ax4 = fig.add_subplot(gs[4])

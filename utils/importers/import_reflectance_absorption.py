@@ -1,5 +1,3 @@
-# /utils/importers/import_reflectance_absorption.py
-
 import pandas as pd
 import numpy as np
 import os
@@ -11,6 +9,9 @@ def safe_float(val):
     except Exception:
         return np.nan
 
+# Define some allowed categories
+ALLOWED_CATEGORIES = {"plant", "mineral", "fabric", "custom"}
+
 def import_reflectance_absorption_from_csv(uploaded_file, meta, extrap_lower, extrap_upper):
     """
     Converts a digitized reflectance or absorption spectrum CSV into a wide TSV.
@@ -21,7 +22,7 @@ def import_reflectance_absorption_from_csv(uploaded_file, meta, extrap_lower, ex
         - spectrum_name: str
         - description: str (optional)
         - spectrum_type: str, either 'reflectance' or 'absorption' (case-insensitive)
-        - hex_color: str (optional, e.g. '#00FF00')
+        - category: str (optional, default 'custom'), e.g. 'plant', 'mineral', 'fabric', or custom string
     - extrap_lower: bool, extend data down to 300 nm if True
     - extrap_upper: bool, extend data up to 1100 nm if True
 
@@ -74,8 +75,13 @@ def import_reflectance_absorption_from_csv(uploaded_file, meta, extrap_lower, ex
         elif spectrum_type != "reflectance":
             return False, "spectrum_type must be 'reflectance' or 'absorption'."
 
+        category = meta.get("category", "custom").strip().lower()
+        if category not in ALLOWED_CATEGORIES:
+            # Accept any custom category string but normalize
+            category = category.replace(" ", "_")
+
         output_df = pd.DataFrame([interpolated], columns=new_wavelengths)
-        output_df.insert(0, 'Hex Color', meta.get("hex_color", "#000000"))  # new hex color column
+        # Removed hex color
         output_df.insert(0, 'Spectrum Type', spectrum_type)
         output_df.insert(0, 'Description', meta.get("description", ""))
         output_df.insert(0, 'Spectrum Name', meta.get("spectrum_name", "Unnamed_Spectrum"))
@@ -89,7 +95,7 @@ def import_reflectance_absorption_from_csv(uploaded_file, meta, extrap_lower, ex
         suffix = f"_extrapolated_{'_'.join(suffix_parts)}" if suffix_parts else ""
 
         filename = f"{sanitized}{suffix}.tsv"
-        out_dir = os.path.join("data", "reflectance_absorption")
+        out_dir = os.path.join("data", "reflectance_absorption", category)
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, filename)
         output_df.to_csv(out_path, sep='\t', index=False)
